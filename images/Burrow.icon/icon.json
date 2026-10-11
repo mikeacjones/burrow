@@ -1,0 +1,111 @@
+{
+  "color-space-for-untagged-svg-colors": "display-p3",
+  "groups": [
+    {
+      "layers": [
+        {
+          "glass": false,
+          "hidden": false,
+          "image-name": "Prompt.png",
+          "name": "Prompt"
+        }
+      ],
+      "lighting": "individual",
+      "name": "Prompt",
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.3
+      },
+      "specular": false,
+      "translucency": {
+        "enabled": false,
+        "value": 0.5
+      }
+    },
+    {
+      "layers": [
+        {
+          "glass": false,
+          "hidden": false,
+          "image-name": "Burrow.png",
+          "name": "Burrow"
+        }
+      ],
+      "lighting": "individual",
+      "name": "Burrow",
+      "shadow": {
+        "kind": "layer-color",
+        "opacity": 0.4
+      },
+      "specular": true,
+      "translucency": {
+        "enabled": false,
+        "value": 0.5
+      }
+    },
+    {
+      "layers": [
+        {
+          "glass": true,
+          "hidden": false,
+          "image-name": "Hill.png",
+          "name": "Hill"
+        }
+      ],
+      "lighting": "individual",
+      "name": "Hill",
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.5
+      },
+      "specular": true,
+      "translucency": {
+        "enabled": false,
+        "value": 0.5
+      }
+    },
+    {
+      "layers": [
+        {
+          "glass": false,
+          "hidden": false,
+          "image-name": "Sky.png",
+          "name": "Sky"
+        }
+      ],
+      "lighting": "individual",
+      "name": "Sky",
+      "shadow": {
+        "kind": "none",
+        "opacity": 0
+      },
+      "specular": false,
+      "translucency": {
+        "enabled": false,
+        "value": 0.5
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  },
+  "fill-specializations": [
+    {
+      "value": {
+        "linear-gradient": [
+          "srgb:0.20000,0.16078,0.36078,1.00000",
+          "srgb:0.07843,0.05882,0.14118,1.00000"
+        ]
+      }
+    },
+    {
+      "appearance": "dark",
+      "value": {
+        "linear-gradient": [
+          "srgb:0.12549,0.09804,0.23529,1.00000",
+          "srgb:0.04314,0.03137,0.08627,1.00000"
+        ]
+      }
+    }
+  ]
+}

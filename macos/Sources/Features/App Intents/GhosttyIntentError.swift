@@ -5,9 +5,9 @@ enum GhosttyIntentError: Error, CustomLocalizedStringResourceConvertible {
 
     var localizedStringResource: LocalizedStringResource {
         switch self {
-        case .appUnavailable: "The Ghostty app isn't properly initialized."
+        case .appUnavailable: "The \(Burrow.appName) app isn't properly initialized."
         case .surfaceNotFound: "The terminal no longer exists."
-        case .permissionDenied: "Ghostty doesn't allow Shortcuts."
+        case .permissionDenied: "\(Burrow.appName) doesn't allow Shortcuts."
         }
     }
 }
