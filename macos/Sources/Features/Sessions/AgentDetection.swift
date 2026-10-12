@@ -65,8 +65,16 @@ struct AgentKind: Equatable, Hashable {
         // Only argv[0] identifies the program, unless it is an interpreter, in
         // which case the script path follows (possibly after a flag like `-m`).
         var candidates = Array(arguments.prefix(1))
-        if let first = arguments.first, interpreters.contains(basename(first)) {
-            candidates += arguments.dropFirst().prefix(2)
+        if let first = arguments.first {
+            // Launchers are often symlinks with generic names (Cursor's is
+            // `~/.local/bin/agent` -> `.../cursor-agent/versions/.../cursor-agent`).
+            if first.hasPrefix("/") {
+                let resolved = URL(fileURLWithPath: first).resolvingSymlinksInPath().path
+                if resolved != first { candidates.append(resolved) }
+            }
+            if interpreters.contains(basename(first)) {
+                candidates += arguments.dropFirst().prefix(2)
+            }
         }
         if let processName { candidates.append(processName) }
 
@@ -126,16 +134,6 @@ enum TerminalTitle {
     /// Leading glyphs agents use in titles to signal state (spinners, stars, dots).
     private static let statusGlyphs: Set<Character> = ["✳", "✶", "✻", "✽", "✢", "·", "*", "●", "○", "◐", "◓", "◑", "◒"]
 
-    /// True if the title starts with a braille spinner frame, which agents
-    /// (Claude Code, Cursor, Gemini, …) animate in the title while working.
-    static func hasSpinner(_ title: String) -> Bool {
-        // Spinners can be two cells wide and start with the blank pattern
-        // (U+2800, e.g. Cursor's "⠀⠞"), so require a non-blank cell in the
-        // leading run of braille characters.
-        let braille = title.unicodeScalars.prefix { (0x2800...0x28FF).contains($0.value) }
-        return braille.contains { $0.value != 0x2800 }
-    }
-
     /// Strip leading status/spinner glyphs from a title.
     static func clean(_ title: String) -> String {
         var result = Substring(title)
@@ -145,5 +143,73 @@ enum TerminalTitle {
             result = result.dropFirst()
         }
         return String(result).trimmingCharacters(in: .whitespaces)
+    }
+}
+
+/// Reads an agent's state from what it shows: the bottom of its screen and
+/// its terminal title. Agents draw distinctive text while working ("esc to
+/// interrupt") and when asking for approval (their prompt's option lines),
+/// which is far more reliable than inferring state from CPU use.
+///
+/// Matching ignores case and whitespace so it is robust to how a TUI lays
+/// out its text.
+enum AgentStateDetector {
+    /// Option lines and labels that only appear in an agent's approval prompt.
+    /// These are specific on purpose: loose phrases like "do you want to"
+    /// also match ordinary replies ("Do you want me to commit this?").
+    static let needsInputScreenMarkers: [String] = [
+        // Claude Code
+        "yes, and always allow",
+        "yes, and switch to auto mode",
+        "yes, and don't ask again",
+        "tell claude what to do differently",
+        // Codex
+        "yes, proceed (y)",
+        "don't ask again for commands",
+        "allow this exact command",
+        // Cursor
+        "run this command? not in allowlist",
+        "run (once) (y)",
+        "waiting for approval",
+        "skip & tell the agent",
+    ]
+
+    /// Titles agents set while waiting on the user.
+    static let needsInputTitleMarkers: [String] = [
+        "action required",              // Codex
+        "waiting for confirmation",     // Cursor
+        "🔐",                           // Cursor
+    ]
+
+    /// Footer text agents show only while a turn is running.
+    static let workingScreenMarkers: [String] = [
+        "esc to interrupt",             // Claude Code, Codex
+        "esc to cancel",                // Gemini
+        "esc interrupt",                // OpenCode
+        "ctrl+c to interrupt",
+        "ctrl-c to interrupt",
+        "ctrl+c to stop",               // Cursor
+    ]
+
+    /// Titles agents set while working.
+    static let workingTitleMarkers: [String] = [
+        "⏳ working",                   // Cursor
+    ]
+
+    static func needsInput(screen: String, title: String) -> Bool {
+        let screen = normalize(screen), title = normalize(title)
+        return needsInputScreenMarkers.contains { screen.contains(normalize($0)) }
+            || needsInputTitleMarkers.contains { title.contains(normalize($0)) }
+    }
+
+    static func working(screen: String, title: String) -> Bool {
+        let screen = normalize(screen), title = normalize(title)
+        return workingScreenMarkers.contains { screen.contains(normalize($0)) }
+            || workingTitleMarkers.contains { title.contains(normalize($0)) }
+    }
+
+    /// Lowercased with all whitespace removed.
+    static func normalize(_ text: String) -> String {
+        String(text.lowercased().unicodeScalars.filter { !CharacterSet.whitespacesAndNewlines.contains($0) })
     }
 }

@@ -193,20 +193,17 @@ final class SessionStore: ObservableObject {
     /// (a few file reads and libproc calls per surface).
     private static let refreshInterval: TimeInterval = 0.5
 
-    /// A surface counts as working if it showed activity within this window.
-    /// This smooths over brief pauses between agent steps.
-    private static let workingGracePeriod: TimeInterval = 2.5
+    /// An agent must show no working signal for this long before it counts
+    /// as idle, so brief gaps between steps don't flicker.
+    private static let idleDebounce: TimeInterval = 1.0
 
-    /// CPU use (fraction of one core) that an agent's process group must stay
-    /// above, for `busySampleCount` consecutive samples, to count as working.
-    ///
-    /// Measured on Claude Code: while working (spinner animating, tools
-    /// running) it never dropped below ~2.4%; while idle it sits around 0.5%
-    /// with isolated one-sample blips up to ~7% from timers and GC. Requiring a
-    /// sustained floor ignores the blips that a single-sample threshold
-    /// mistook for work.
-    private static let busyCPUFloor = 0.015
-    private static let busySampleCount = 3
+    /// A title that changed at least twice within this window is animating
+    /// (a spinner), which agents use to show they're working.
+    private static let titleAnimationWindow: TimeInterval = 3.0
+
+    /// How recently an agent must have been working for its notification to
+    /// count as a request for input.
+    private static let notificationWindow: TimeInterval = 15
 
     private let defaults = UserDefaults.ghostty
     private var timer: Timer?
@@ -224,11 +221,17 @@ final class SessionStore: ObservableObject {
     }
 
     private struct ActivityTracker {
-        var pgid: pid_t = 0
-        var lastCPU: UInt64 = 0
-        var lastSample = Date.distantPast
-        var lastActive = Date.distantPast
-        var recentCPU: [Double] = []
+        var lastTitle = ""
+        var titleChanges: [Date] = []
+        var lastWorking = Date.distantPast
+        /// Whether the current working stretch included explicit working text
+        /// (e.g. "esc to interrupt"). Only those count as a finished turn, so
+        /// an agent's startup animation doesn't show as "done".
+        var sawMarkedWorking = false
+        /// Set when the agent requests a desktop notification (e.g. Claude's
+        /// "needs your permission"); cleared once it resumes work or the
+        /// session is viewed.
+        var notified = false
         var wasWorking = false
         var unseenCompletion = false
     }
@@ -404,12 +407,29 @@ final class SessionStore: ObservableObject {
                 MainActor.assumeIsolated { self?.scheduleRefresh() }
             })
         }
+        observers.append(center.addObserver(forName: .burrowSurfaceDidNotify, object: nil, queue: .main) { [weak self] note in
+            guard let surface = note.object as? Ghostty.SurfaceView else { return }
+            MainActor.assumeIsolated { self?.surfaceDidNotify(surface) }
+        })
         observers.append(center.addObserver(forName: .ghosttyConfigDidChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.needsFontResolve = true
                 self?.scheduleRefresh()
             }
         })
+    }
+
+    /// A notification only means "needs input" if it arrives mid-turn, e.g.
+    /// Claude's "needs your permission" a few seconds after it stalls on an
+    /// approval. Agents also notify long after finishing (Claude's "waiting for
+    /// your input" after 60s idle), which is just idle.
+    private func surfaceDidNotify(_ surface: Ghostty.SurfaceView) {
+        var tracker = activity[surface.id] ?? ActivityTracker()
+        if Date().timeIntervalSince(tracker.lastWorking) < Self.notificationWindow {
+            tracker.notified = true
+            activity[surface.id] = tracker
+            scheduleRefresh()
+        }
     }
 
     func scheduleRefresh() {
@@ -438,7 +458,7 @@ final class SessionStore: ObservableObject {
                     surface: surface,
                     agent: identity?.agent,
                     activity: activityState(
-                        surface: surface, pid: pid, identity: identity,
+                        surface: surface, identity: identity,
                         isViewed: isViewed, now: now)))
             }
 
@@ -587,13 +607,12 @@ final class SessionStore: ObservableObject {
 
     private func activityState(
         surface: Ghostty.SurfaceView,
-        pid: pid_t?,
         identity: ProcessIdentity?,
         isViewed: Bool,
         now: Date
     ) -> SessionActivity {
         let id = surface.id
-        guard let pid, let identity else { return .shell }
+        guard let identity else { return .shell }
         guard identity.agent != nil else {
             activity[id] = nil
             return identity.isShell ? .shell : .command(identity.name)
@@ -601,43 +620,49 @@ final class SessionStore: ObservableObject {
 
         var tracker = activity[id] ?? ActivityTracker()
 
-        // CPU usage of the agent's whole process group since the last sample.
-        let cpu = ProcessInspector.cpuTimeNanos(processGroup: pid)
-        if tracker.pgid != pid { tracker.recentCPU = [] }
-        if tracker.pgid == pid, tracker.lastSample != .distantPast {
-            let elapsed = now.timeIntervalSince(tracker.lastSample)
-            if elapsed > 0, cpu >= tracker.lastCPU {
-                let fraction = Double(cpu - tracker.lastCPU) / 1_000_000_000 / elapsed
-                tracker.recentCPU = Array((tracker.recentCPU + [fraction]).suffix(Self.busySampleCount))
+        // Agents report their own state through what they draw: footer text
+        // and approval prompts on screen, their title, progress (OSC 9;4),
+        // notifications, and the bell.
+        // Only changes to the title's leading status glyph count as animation
+        // ("◐ Fix bug" -> "◑ Fix bug"); a title changing to new text (e.g. the
+        // shell's title being replaced when an agent starts) is not.
+        let title = surface.title
+        if title != tracker.lastTitle {
+            if !tracker.lastTitle.isEmpty, TerminalTitle.clean(title) == TerminalTitle.clean(tracker.lastTitle) {
+                tracker.titleChanges.append(now)
             }
-            if tracker.recentCPU.count == Self.busySampleCount,
-               let floor = tracker.recentCPU.min(), floor > Self.busyCPUFloor {
-                tracker.lastActive = now
-            }
+            tracker.lastTitle = title
         }
-        tracker.pgid = pid
-        tracker.lastCPU = cpu
-        tracker.lastSample = now
+        tracker.titleChanges.removeAll { now.timeIntervalSince($0) > Self.titleAnimationWindow }
+        let titleAnimating = tracker.titleChanges.count >= 2
 
-        // Explicit signals from the agent itself.
-        if TerminalTitle.hasSpinner(surface.title) {
-            tracker.lastActive = now
-        }
-        if let progress = surface.progressReport, progress.state != .remove {
-            tracker.lastActive = now
-        }
+        let screen = surface.activeScreenTail()
+        let markedWorking = AgentStateDetector.working(screen: screen, title: title)
+        let progressActive = surface.progressReport.map { $0.state != .remove } ?? false
 
-        let working = now.timeIntervalSince(tracker.lastActive) < Self.workingGracePeriod
-        if tracker.wasWorking && !working && !isViewed {
+        // Explicit "working" text means any earlier attention request was answered.
+        if markedWorking || isViewed { tracker.notified = false }
+
+        let needsInput = AgentStateDetector.needsInput(screen: screen, title: title)
+            || surface.bell
+            || tracker.notified
+        if markedWorking || titleAnimating || progressActive {
+            tracker.lastWorking = now
+        }
+        let working = !needsInput && now.timeIntervalSince(tracker.lastWorking) < Self.idleDebounce
+        if working && markedWorking { tracker.sawMarkedWorking = true }
+
+        if tracker.wasWorking && !working && !needsInput && !isViewed && tracker.sawMarkedWorking {
             tracker.unseenCompletion = true
         }
-        if isViewed {
+        if !working { tracker.sawMarkedWorking = false }
+        if isViewed || working {
             tracker.unseenCompletion = false
         }
         tracker.wasWorking = working
         activity[id] = tracker
 
-        if surface.bell { return .agentNeedsInput }
+        if needsInput { return .agentNeedsInput }
         if working { return .agentWorking }
         if tracker.unseenCompletion { return .agentDone }
         return .agentIdle

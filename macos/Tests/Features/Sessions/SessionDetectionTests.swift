@@ -110,6 +110,18 @@ struct AgentDetectionTests {
         #expect(AgentKind.detect(arguments: arguments, processName: nil)?.id == expected)
     }
 
+    @Test func resolvesSymlinkedLaunchers() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("agent-\(UUID().uuidString)")
+        let target = dir.appendingPathComponent("cursor-agent/versions/1/cursor-agent")
+        try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: target.path, contents: Data())
+        let link = dir.appendingPathComponent("agent")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        #expect(AgentKind.detect(arguments: [link.path, "--use-system-ca", "index.js"], processName: "agent")?.id == "cursor")
+    }
+
     @Test(arguments: [
         ["vim", "/src/codex/main.go"],
         ["-zsh"],
@@ -119,12 +131,9 @@ struct AgentDetectionTests {
         #expect(AgentKind.detect(arguments: arguments, processName: nil) == nil)
     }
 
-    @Test func titleSpinnerDetection() {
-        #expect(TerminalTitle.hasSpinner("⠐ Fix the sidebar"))
-        #expect(TerminalTitle.hasSpinner("⠀⠞ Cursor first frame"))
-        #expect(!TerminalTitle.hasSpinner("✳ Claude Code"))
-        #expect(!TerminalTitle.hasSpinner("plain title"))
+    @Test func titleCleaning() {
         #expect(TerminalTitle.clean("⠐ Fix the sidebar") == "Fix the sidebar")
+        #expect(TerminalTitle.clean("◐ Sleep and echo command") == "Sleep and echo command")
         #expect(TerminalTitle.clean("✳ Claude Code") == "Claude Code")
     }
 
@@ -132,5 +141,63 @@ struct AgentDetectionTests {
         #expect(ShellNames.isShell("-zsh"))
         #expect(ShellNames.isShell("/bin/bash"))
         #expect(!ShellNames.isShell("claude"))
+    }
+}
+
+/// Screens and titles recorded from Claude Code 2.1, Codex 0.162 and Cursor
+/// Agent 2026.10 while working, waiting for approval, and idle.
+struct AgentStateDetectorTests {
+    private func needsInput(_ screen: String, title: String = "") -> Bool {
+        AgentStateDetector.needsInput(screen: screen, title: title)
+    }
+
+    private func working(_ screen: String, title: String = "") -> Bool {
+        AgentStateDetector.working(screen: screen, title: title)
+    }
+
+    @Test func claude() {
+        #expect(working("✻ Moonwalking… (esc to interrupt)"))
+        #expect(needsInput("""
+            Bash command
+              echo hi > hello.txt
+            Do you want to proceed?
+            ❯ 1. Yes
+              2. Yes, and always allow access to myrepo/ from this project
+              3. No, and tell Claude what to do differently (esc)
+            """))
+        let idle = "⏺ The command ran and printed: finished\n✻ Cogitated for 11s\n❯ "
+        #expect(!working(idle, title: "✳ Sleep and echo command"))
+        #expect(!needsInput(idle, title: "✳ Sleep and echo command"))
+    }
+
+    @Test func codex() {
+        #expect(working("• Working (2s • esc to interrupt)"))
+        #expect(needsInput("""
+            Allow this exact command to create it?
+            $ echo hi > hello.txt
+            › 1. Yes, proceed (y)
+              2. Yes, and don't ask again for commands that start with `echo hi` (p)
+            """))
+        #expect(needsInput("", title: "[ ! ] Action Required | Reply ok | myrepo"))
+        #expect(!working("› ", title: "Reply ok | myrepo"))
+    }
+
+    @Test func cursor() {
+        #expect(working("", title: "One Word - ⏳ Working ..·"))
+        #expect(working("→ Add a follow-up                 ctrl+c to stop"))
+        #expect(needsInput("", title: "One Word - 🔐 Waiting for confirmation"))
+        #expect(needsInput("Run this command?\nNot in allowlist: echo, sleep\n→ Run (once) (y)"))
+        #expect(!working("→ Add a follow-up", title: "One Word - ✅ Ready"))
+    }
+
+    @Test func ignoresOrdinaryReplies() {
+        // An agent asking a question in its reply is not an approval prompt.
+        #expect(!needsInput("Want me to commit this? Do you want to also push it?"))
+        #expect(!needsInput("I could allow this command in the config if you want."))
+    }
+
+    @Test func ignoresWhitespaceDifferences() {
+        #expect(working("(esc   to\ninterrupt)"))
+        #expect(needsInput("Yes,proceed(y)"))
     }
 }

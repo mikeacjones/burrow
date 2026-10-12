@@ -1603,6 +1603,8 @@ extension Ghostty {
                 guard let surfaceView = self.surfaceView(from: surface) else { return }
                 guard let title = String(cString: n.title!, encoding: .utf8) else { return }
                 guard let body = String(cString: n.body!, encoding: .utf8) else { return }
+                // ghostty-fork: lets the session sidebar see agents asking for attention.
+                NotificationCenter.default.post(name: .burrowSurfaceDidNotify, object: surfaceView)
                 showDesktopNotification(surfaceView, title: title, body: body)
 
             default:
