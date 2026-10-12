@@ -46,6 +46,35 @@ enum GitWorktreeResolver {
         }
     }
 
+    /// All worktrees of the repository with the given common git dir: the main
+    /// checkout (unless the repository is bare) plus every linked worktree
+    /// registered under `<commonDir>/worktrees`. Worktrees whose directory no
+    /// longer exists (prunable) are skipped.
+    static func worktrees(commonDir: String) -> [GitWorktreeInfo] {
+        var roots: [String] = []
+
+        // A non-bare repository's main checkout is the directory containing `.git`.
+        if (commonDir as NSString).lastPathComponent == ".git" {
+            roots.append((commonDir as NSString).deletingLastPathComponent)
+        }
+
+        // Each linked worktree records the path to its `.git` file in `gitdir`.
+        let worktreesDir = (commonDir as NSString).appendingPathComponent("worktrees")
+        let entries = (try? fm.contentsOfDirectory(atPath: worktreesDir)) ?? []
+        for entry in entries.sorted() {
+            let gitdirFile = ((worktreesDir as NSString).appendingPathComponent(entry) as NSString)
+                .appendingPathComponent("gitdir")
+            guard let dotGit = readTrimmed(gitdirFile) else { continue }
+            let path = absolute(dotGit, relativeTo: (gitdirFile as NSString).deletingLastPathComponent)
+            roots.append((path as NSString).deletingLastPathComponent)
+        }
+
+        return roots.compactMap { root in
+            guard let info = inspect(worktreeRoot: root), info.commonDir == commonDir else { return nil }
+            return info
+        }
+    }
+
     private static func inspect(worktreeRoot dir: String) -> GitWorktreeInfo? {
         let dotGit = (dir as NSString).appendingPathComponent(".git")
         var isDir: ObjCBool = false

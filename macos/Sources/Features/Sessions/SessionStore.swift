@@ -26,19 +26,6 @@ struct SessionItem: Identifiable, Equatable {
         if let agent, agent.genericTitles.contains(cleaned.lowercased()) { return nil }
         return cleaned
     }
-
-    /// The worktree directory name, shown only when it adds information
-    /// beyond the branch name (e.g. `feature/foo` usually lives in `foo` or `feature-foo`).
-    var worktreeLabel: String? {
-        guard let git, git.isLinkedWorktree else { return nil }
-        let name = git.worktreeName
-        guard let branch = git.branch else { return name }
-        let variants: Set<String> = [
-            branch, branch.replacingOccurrences(of: "/", with: "-"),
-            (branch as NSString).lastPathComponent,
-        ]
-        return variants.contains(name) ? nil : name
-    }
 }
 
 /// Sessions belonging to the same git repository (or "Other" for non-git directories).
@@ -47,6 +34,10 @@ struct SessionGroup: Identifiable, Equatable {
     let name: String
     let isRepository: Bool
     var sessions: [SessionItem]
+
+    /// Worktrees of this repository that have no session open, shown dimmed
+    /// so a session can be started in them with one click.
+    var idleWorktrees: [GitWorktreeInfo] = []
 }
 
 /// Derives git worktree and agent activity information for every session in
@@ -71,8 +62,8 @@ final class SessionStore: ObservableObject {
         didSet { defaults.set(Array(foldedGroups), forKey: Keys.folded) }
     }
 
-    static let minWidth: CGFloat = 180
-    static let maxWidth: CGFloat = 460
+    static let minWidth: CGFloat = 160
+    static let maxWidth: CGFloat = 400
     static let railWidth: CGFloat = 40
 
     /// The horizontal space the sidebar currently takes in each window.
@@ -103,6 +94,7 @@ final class SessionStore: ObservableObject {
     private var activity: [UUID: ActivityTracker] = [:]
     private var processCache: [pid_t: ProcessIdentity] = [:]
     private var gitCache: [String: (info: GitWorktreeInfo?, at: Date)] = [:]
+    private var worktreeCache: [String: (worktrees: [GitWorktreeInfo], at: Date)] = [:]
 
     private struct ProcessIdentity {
         let name: String
@@ -131,7 +123,7 @@ final class SessionStore: ObservableObject {
         let storedWidth = defaults.double(forKey: Keys.width)
         width = storedWidth > 0
             ? min(max(CGFloat(storedWidth), Self.minWidth), Self.maxWidth)
-            : 250
+            : 220
         foldedGroups = Set(defaults.stringArray(forKey: Keys.folded) ?? [])
         start()
     }
@@ -155,6 +147,15 @@ final class SessionStore: ObservableObject {
         guard let session = SessionManager.shared.session(id: id),
               let controller = controller ?? Self.keyController else { return }
         SessionManager.shared.attach(session, to: controller)
+        scheduleRefresh()
+    }
+
+    /// Start a new session in a worktree that doesn't have one yet.
+    func openWorktree(_ worktree: GitWorktreeInfo, in controller: TerminalController?) {
+        guard let controller = controller ?? Self.keyController else { return }
+        var config = Ghostty.SurfaceConfiguration()
+        config.workingDirectory = worktree.worktreeRoot
+        SessionManager.shared.newSession(in: controller, baseConfig: config)
         scheduleRefresh()
     }
 
@@ -250,7 +251,15 @@ final class SessionStore: ObservableObject {
         processCache = processCache.filter { livePIDs.contains($0.key) }
         if gitCache.count > 256 { gitCache.removeAll() }
 
-        let newGroups = group(items)
+        let newGroups = group(items).map { group in
+            guard group.isRepository else { return group }
+            var group = group
+            let open = Set(group.sessions.compactMap { $0.git?.worktreeRoot })
+            group.idleWorktrees = worktrees(commonDir: group.id, now: now)
+                .filter { !open.contains($0.worktreeRoot) }
+            return group
+        }
+        if worktreeCache.count > 64 { worktreeCache.removeAll() }
         if newGroups != groups {
             groups = newGroups
         }
@@ -295,6 +304,19 @@ final class SessionStore: ObservableObject {
         let info = GitWorktreeResolver.resolve(directory: pwd)
         gitCache[pwd] = (info, now)
         return info
+    }
+
+    /// All worktrees of a repository, main checkout first, then by branch.
+    private func worktrees(commonDir: String, now: Date) -> [GitWorktreeInfo] {
+        if let cached = worktreeCache[commonDir], now.timeIntervalSince(cached.at) < 3 {
+            return cached.worktrees
+        }
+        let worktrees = GitWorktreeResolver.worktrees(commonDir: commonDir).sorted { lhs, rhs in
+            if lhs.isLinkedWorktree != rhs.isLinkedWorktree { return !lhs.isLinkedWorktree }
+            return lhs.displayRef.localizedStandardCompare(rhs.displayRef) == .orderedAscending
+        }
+        worktreeCache[commonDir] = (worktrees, now)
+        return worktrees
     }
 
     private func identify(pid: pid_t) -> ProcessIdentity {

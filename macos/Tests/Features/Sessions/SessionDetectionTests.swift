@@ -21,6 +21,8 @@ struct GitWorktreeResolverTests {
         try "gitdir: \(featureGit.path)\n".write(to: feature.appendingPathComponent(".git"), atomically: true, encoding: .utf8)
         try "../..\n".write(to: featureGit.appendingPathComponent("commondir"), atomically: true, encoding: .utf8)
         try "ref: refs/heads/feature/sidebar\n".write(to: featureGit.appendingPathComponent("HEAD"), atomically: true, encoding: .utf8)
+        try "\(feature.appendingPathComponent(".git").path)\n".write(
+            to: featureGit.appendingPathComponent("gitdir"), atomically: true, encoding: .utf8)
 
         // Linked worktree with a detached HEAD.
         let detached = root.appendingPathComponent("myrepo-detached")
@@ -29,6 +31,8 @@ struct GitWorktreeResolverTests {
         try "gitdir: \(detachedGit.path)\n".write(to: detached.appendingPathComponent(".git"), atomically: true, encoding: .utf8)
         try "../..\n".write(to: detachedGit.appendingPathComponent("commondir"), atomically: true, encoding: .utf8)
         try "d4587c5e0000000000000000000000000000000\n".write(to: detachedGit.appendingPathComponent("HEAD"), atomically: true, encoding: .utf8)
+        try "\(detached.appendingPathComponent(".git").path)\n".write(
+            to: detachedGit.appendingPathComponent("gitdir"), atomically: true, encoding: .utf8)
 
         return root
     }
@@ -64,6 +68,28 @@ struct GitWorktreeResolverTests {
         let info = try #require(GitWorktreeResolver.resolve(directory: root.appendingPathComponent("myrepo-detached").path))
         #expect(info.branch == nil)
         #expect(info.displayRef == "@d4587c5")
+    }
+
+    @Test func listsAllWorktrees() throws {
+        let root = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let main = try #require(GitWorktreeResolver.resolve(directory: root.appendingPathComponent("myrepo").path))
+        let worktrees = GitWorktreeResolver.worktrees(commonDir: main.commonDir)
+        #expect(Set(worktrees.map(\.worktreeName)) == ["myrepo", "myrepo-feature", "myrepo-detached"])
+        #expect(worktrees.first { !$0.isLinkedWorktree }?.branch == "main")
+        #expect(worktrees.contains { $0.branch == "feature/sidebar" })
+    }
+
+    @Test func skipsPrunedWorktrees() throws {
+        let root = try makeFixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        // A worktree whose directory was deleted without `git worktree prune`.
+        try FileManager.default.removeItem(at: root.appendingPathComponent("myrepo-detached"))
+        let main = try #require(GitWorktreeResolver.resolve(directory: root.appendingPathComponent("myrepo").path))
+        let names = GitWorktreeResolver.worktrees(commonDir: main.commonDir).map(\.worktreeName)
+        #expect(!names.contains("myrepo-detached"))
     }
 
     @Test func outsideRepository() {

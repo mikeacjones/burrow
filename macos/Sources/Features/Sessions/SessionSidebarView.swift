@@ -123,6 +123,9 @@ private struct SessionGroupSection: View {
                 ForEach(group.sessions) { session in
                     SessionRow(store: store, window: window, session: session)
                 }
+                ForEach(group.idleWorktrees, id: \.worktreeRoot) { worktree in
+                    WorktreeRow(store: store, window: window, worktree: worktree)
+                }
             }
         }
     }
@@ -183,16 +186,6 @@ private struct SessionRow: View {
                         .font(.system(size: 12, weight: isCurrent ? .semibold : .regular))
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    if let worktree = session.worktreeLabel {
-                        Text(worktree)
-                            .font(.system(size: 9, weight: .medium))
-                            .foregroundColor(.secondary)
-                            .lineLimit(1)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(Capsule().fill(Color.primary.opacity(0.08)))
-                            .help("Worktree: \(session.git?.worktreeRoot ?? worktree)")
-                    }
                     Spacer(minLength: 0)
                     if session.surfaceCount > 1 {
                         Label("\(session.surfaceCount)", systemImage: "square.split.2x1")
@@ -289,6 +282,50 @@ private struct SessionRow: View {
     }
 }
 
+/// A worktree with no open session: dimmed, and clicking it opens a session there.
+private struct WorktreeRow: View {
+    @ObservedObject var store: SessionStore
+    let window: SidebarWindowRef
+    let worktree: GitWorktreeInfo
+    @State private var hovering = false
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 8) {
+            Image(systemName: hovering ? "plus.circle.fill" : "circle.dashed")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .frame(width: 20, height: 16)
+
+            Text(worktree.displayRef)
+                .font(.system(size: 12))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, 10)
+        .padding(.trailing, 6)
+        .padding(.vertical, 4)
+        .opacity(hovering ? 0.85 : 0.45)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .fill(hovering ? Color.primary.opacity(0.05) : .clear))
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .onTapGesture { store.openWorktree(worktree, in: window.controller) }
+        .help("Open a session in \(abbreviate(worktree.worktreeRoot))")
+        .contextMenu {
+            Button("Open Session") { store.openWorktree(worktree, in: window.controller) }
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: worktree.worktreeRoot)])
+            }
+            Button("Copy Path") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(worktree.worktreeRoot, forType: .string)
+            }
+        }
+    }
+}
+
 // MARK: Collapsed rail
 
 private struct SessionRail: View {
@@ -316,6 +353,16 @@ private struct SessionRail: View {
                                 .contentShape(Rectangle())
                                 .onTapGesture { store.select(session.id, in: window.controller) }
                                 .help(railTooltip(group: group, session: session))
+                        }
+                        ForEach(group.idleWorktrees, id: \.worktreeRoot) { worktree in
+                            Image(systemName: "circle.dashed")
+                                .font(.system(size: 9))
+                                .foregroundColor(.secondary)
+                                .opacity(0.5)
+                                .frame(width: 30, height: 20)
+                                .contentShape(Rectangle())
+                                .onTapGesture { store.openWorktree(worktree, in: window.controller) }
+                                .help("\(group.name) · \(worktree.displayRef) — click to open")
                         }
                     }
                 }
