@@ -54,6 +54,13 @@ enum GitWorktreeCommands {
         /// Commits on the worktree's branch that aren't on any remote-tracking
         /// branch. Zero means the branch can be deleted without losing work.
         let unpushedCommits: Int
+        /// The reason given by `git worktree lock`, if the worktree is locked
+        /// by something that may still be using it. Stale locks are nil.
+        let activeLock: String?
+        /// Whether the worktree has a lock left by a process that has exited,
+        /// which is removed without asking.
+        let staleLock: Bool
+        var isLocked: Bool { activeLock != nil || staleLock }
     }
 
     static func checkRemoval(of worktree: GitWorktreeInfo) -> RemovalCheck {
@@ -69,16 +76,66 @@ enum GitWorktreeCommands {
                 in: worktree.worktreeRoot)
             unpushed = Int(count.output.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
         }
-        return RemovalCheck(changedFiles: changed, unpushedCommits: unpushed)
+        let lock = lockReason(of: worktree)
+        let stale = lock.map(isStale) ?? false
+        return RemovalCheck(
+            changedFiles: changed,
+            unpushedCommits: unpushed,
+            activeLock: stale ? nil : lock,
+            staleLock: stale)
+    }
+
+    /// The worktree's lock reason ("" if locked without one), or nil if it
+    /// isn't locked. Read from `<gitdir>/locked`.
+    private static func lockReason(of worktree: GitWorktreeInfo) -> String? {
+        let dotGit = (worktree.worktreeRoot as NSString).appendingPathComponent(".git")
+        guard let contents = try? String(contentsOfFile: dotGit, encoding: .utf8),
+              contents.hasPrefix("gitdir:") else { return nil }
+        var gitDir = contents.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespacesAndNewlines)
+        if !gitDir.hasPrefix("/") {
+            gitDir = (worktree.worktreeRoot as NSString).appendingPathComponent(gitDir)
+        }
+        let lockFile = (gitDir as NSString).appendingPathComponent("locked")
+        guard let reason = try? String(contentsOfFile: lockFile, encoding: .utf8) else { return nil }
+        return reason.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Whether a lock was left by a process that has since exited. Claude Code
+    /// locks the worktrees it creates with a reason like
+    /// "claude session x (pid 123 start Mon Oct 12 12:08:22 2026)" (UTC) and
+    /// doesn't always unlock them. The lock is stale if that pid is gone or now
+    /// belongs to a process that started at a different time. Locks without a
+    /// pid are never considered stale.
+    private static func isStale(_ reason: String) -> Bool {
+        guard let match = reason.firstMatch(of: #/\(pid (\d+) start ([^)]+)\)/#),
+              let pid = pid_t(match.1) else { return false }
+        guard let started = ProcessInspector.startTime(pid: pid) else { return true }
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        formatter.dateFormat = "EEE MMM d HH:mm:ss yyyy"
+        guard let lockedStart = formatter.date(from: String(match.2)) else { return false }
+        return abs(started.timeIntervalSince(lockedStart)) > 2
     }
 
     /// Remove a linked worktree, and then its branch if `deleteBranch` is set.
-    /// `force` discards uncommitted changes in the worktree.
-    static func remove(_ worktree: GitWorktreeInfo, force: Bool, deleteBranch: Bool) -> Result<Void, Failure> {
+    /// `force` discards uncommitted changes in the worktree, and `unlock`
+    /// removes its lock first.
+    static func remove(
+        _ worktree: GitWorktreeInfo,
+        force: Bool,
+        unlock: Bool,
+        deleteBranch: Bool
+    ) -> Result<Void, Failure> {
         guard worktree.isLinkedWorktree else {
             return .failure(Failure(message: "The repository's main checkout can't be removed."))
         }
         let repoDir = repositoryDirectory(commonDir: worktree.commonDir)
+        if unlock {
+            let unlocked = git(["worktree", "unlock", worktree.worktreeRoot], in: repoDir)
+            guard unlocked.status == 0 else { return .failure(failure(unlocked.output, "git worktree unlock failed.")) }
+        }
         let args = ["worktree", "remove"] + (force ? ["--force"] : []) + [worktree.worktreeRoot]
         let removed = git(args, in: repoDir)
         guard removed.status == 0 else { return .failure(failure(removed.output, "git worktree remove failed.")) }

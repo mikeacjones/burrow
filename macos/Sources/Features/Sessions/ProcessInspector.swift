@@ -47,6 +47,16 @@ enum ProcessInspector {
         return name.isEmpty ? nil : name
     }
 
+    /// When a process started, or nil if there is no such process.
+    static func startTime(pid: pid_t) -> Date? {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0, size > 0 else { return nil }
+        let start = info.kp_proc.p_starttime
+        return Date(timeIntervalSince1970: TimeInterval(start.tv_sec) + TimeInterval(start.tv_usec) / 1_000_000)
+    }
+
     /// Current working directory of a process. Unlike the shell-reported pwd
     /// (OSC 7), this follows a process that changes directory on its own,
     /// e.g. an agent switching into a git worktree.

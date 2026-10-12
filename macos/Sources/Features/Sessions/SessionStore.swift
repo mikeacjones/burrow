@@ -429,8 +429,9 @@ final class SessionStore: ObservableObject {
     }
 
     /// Remove a linked worktree and its branch. Asks first only if something
-    /// would be lost: open sessions in it, uncommitted files, or commits on its
-    /// branch that aren't on a remote (then deleting the branch is opt-in).
+    /// would be lost: open sessions in it, uncommitted files, a lock held by a
+    /// running program, or commits on its branch that aren't on a remote (then
+    /// deleting the branch is opt-in). Stale locks are removed silently.
     /// A clean worktree whose branch is pushed is removed without asking.
     func removeWorktree(_ worktree: GitWorktreeInfo) {
         guard worktree.isLinkedWorktree else { return }
@@ -448,8 +449,13 @@ final class SessionStore: ObservableObject {
         let branchPushed = branch != nil && check.unpushedCommits == 0
         var deleteBranch = branchPushed
 
-        if !openSessions.isEmpty || check.changedFiles > 0 || (branch != nil && !branchPushed) {
+        if !openSessions.isEmpty || check.changedFiles > 0 || check.activeLock != nil || (branch != nil && !branchPushed) {
             var notes: [String] = []
+            if let lock = check.activeLock {
+                notes.append(lock.isEmpty
+                    ? "It is locked, which usually means a program is still using it."
+                    : "It is locked: \(lock).")
+            }
             if !openSessions.isEmpty {
                 notes.append(openSessions.count == 1
                     ? "Its open session will be closed."
@@ -488,8 +494,10 @@ final class SessionStore: ObservableObject {
         }
 
         let force = check.changedFiles > 0
+        let unlock = check.isLocked
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = GitWorktreeCommands.remove(worktree, force: force, deleteBranch: deleteBranch)
+            let result = GitWorktreeCommands.remove(
+                worktree, force: force, unlock: unlock, deleteBranch: deleteBranch)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     self.worktreeCache[worktree.commonDir] = nil
