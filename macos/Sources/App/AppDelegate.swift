@@ -966,7 +966,8 @@ class AppDelegate: NSObject,
             }
         }
 
-        return nil
+        // ghostty-fork: surfaces in background sessions aren't in any window.
+        return SessionManager.onMain { SessionManager.shared.surface(id: uuid) }
     }
 
     // MARK: - Global State

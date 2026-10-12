@@ -75,6 +75,13 @@ final class SessionManager {
     /// behavior is used unchanged.
     nonisolated static let isEnabled = true
 
+    /// Run `body` on the main actor from code that isn't isolated to it
+    /// (e.g. notification callbacks), hopping to the main thread if needed.
+    nonisolated static func onMain<T>(_ body: @MainActor () -> T) -> T {
+        if Thread.isMainThread { return MainActor.assumeIsolated(body) }
+        return DispatchQueue.main.sync { MainActor.assumeIsolated(body) }
+    }
+
     private(set) var sessions: [TerminalSession] = []
     private var orderCounter = 0
     private var observers: [NSObjectProtocol] = []
@@ -293,23 +300,55 @@ final class SessionManager {
     /// window if there are none. Used when the app is reopened from the Dock.
     func reattachOrNewWindow(_ ghostty: Ghostty.App) {
         if let session = detachedSessions.max(by: { $0.lastActive < $1.lastActive }) {
-            // Reuse the undo-restore path: it recreates a window for an existing
-            // tree with an exact frame and restores focus. `adopt` then binds
-            // the new window to this session.
-            let frame = session.lastWindowFrame
-                ?? NSRect(x: 0, y: 0, width: 900, height: 600)
-            let controller = TerminalController(ghostty, with: .init(
-                frame: frame,
-                surfaceTree: session.tree,
-                focusedSurface: session.primarySurface?.id,
-                tabIndex: nil,
-                tabGroup: nil,
-                tabColor: .none))
-            if session.lastWindowFrame == nil { controller.window?.center() }
-            controller.window?.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+            openWindow(for: session, ghostty)
         } else {
             _ = TerminalController.newWindow(ghostty)
+        }
+    }
+
+    /// Open a new window displaying a detached session.
+    private func openWindow(for session: TerminalSession, _ ghostty: Ghostty.App) {
+        // Reuse the undo-restore path: it recreates a window for an existing
+        // tree with an exact frame and restores focus. `adopt` then binds the
+        // new window to this session.
+        let frame = session.lastWindowFrame
+            ?? NSRect(x: 0, y: 0, width: 900, height: 600)
+        let controller = TerminalController(ghostty, with: .init(
+            frame: frame,
+            surfaceTree: session.tree,
+            focusedSurface: session.primarySurface?.id,
+            tabIndex: nil,
+            tabGroup: nil,
+            tabColor: .none))
+        if session.lastWindowFrame == nil { controller.window?.center() }
+        controller.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    /// A surface in any session, including background and detached ones,
+    /// which aren't in a window.
+    func surface(id: UUID) -> Ghostty.SurfaceView? {
+        for session in sessions {
+            if let view = session.surfaces.first(where: { $0.id == id }) { return view }
+        }
+        return nil
+    }
+
+    /// Make sure the session containing `surface` is on screen with that
+    /// surface focused, e.g. when its notification is clicked. A detached
+    /// session is attached to the current window, or a new one if none exist.
+    func reveal(_ surface: Ghostty.SurfaceView) {
+        guard let session = session(containing: surface) else { return }
+        session.lastFocusedSurfaceID = surface.id
+        guard !session.isAttached else { return }
+
+        let current = (NSApp.keyWindow?.windowController as? TerminalController)
+            ?? (NSApp.mainWindow?.windowController as? TerminalController)
+            ?? TerminalController.all.first
+        if let current {
+            attach(session, to: current)
+        } else if let ghostty = (NSApp.delegate as? AppDelegate)?.ghostty {
+            openWindow(for: session, ghostty)
         }
     }
 

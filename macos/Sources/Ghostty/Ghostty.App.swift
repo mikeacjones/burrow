@@ -553,8 +553,11 @@ extension Ghostty {
             // We always require the notification to be attached to a surface.
             guard let uuidString = userInfo["surface"] as? String,
                   let uuid = UUID(uuidString: uuidString),
-                  let surface = delegate?.findSurface(forUUID: uuid),
-                  let window = surface.window else { return false }
+                  let surface = delegate?.findSurface(forUUID: uuid) else { return false }
+
+            // ghostty-fork: a surface in a background session isn't in any
+            // window, so it can't be what the user is looking at. Show it.
+            guard let window = surface.window else { return true }
 
             // If we don't require focus then we're good!
             let requireFocus = userInfo["requireFocus"] as? Bool ?? true
@@ -2499,6 +2502,8 @@ extension Ghostty {
             switch response.actionIdentifier {
             case UNNotificationDefaultActionIdentifier, Ghostty.userNotificationActionShow:
                 // The user clicked on a notification
+                // ghostty-fork: bring a background session on screen first.
+                SessionManager.onMain { SessionManager.shared.reveal(surface) }
                 surface.handleUserNotification(notification: response.notification, focus: true)
             case UNNotificationDismissActionIdentifier:
                 // The user dismissed the notification
