@@ -114,12 +114,22 @@ private struct SessionGroupSection: View {
     let window: SidebarWindowRef
     let group: SessionGroup
     @State private var renaming = false
+    @State private var hovering = false
+    @State private var newWorktree: NewWorktreeState?
+
+    private enum NewWorktreeState: Equatable {
+        case naming
+        case creating(String)
+    }
 
     private var folded: Bool { store.foldedGroups.contains(group.id) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             groupHeader
+            if let newWorktree {
+                newWorktreeRow(newWorktree)
+            }
             if !folded {
                 ForEach(group.rows) { row in
                     rowView(row)
@@ -142,6 +152,58 @@ private struct SessionGroupSection: View {
         case .worktree(let worktree):
             WorktreeRow(store: store, window: window, worktree: worktree)
         }
+    }
+
+    private func startNewWorktree() {
+        if folded { store.toggleFold(group.id) }
+        newWorktree = .naming
+    }
+
+    private func newWorktreeRow(_ state: NewWorktreeState) -> some View {
+        HStack(alignment: .center, spacing: 8) {
+            Group {
+                if case .creating = state {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: "arrow.triangle.branch")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
+            }
+            .frame(width: 20, height: 16)
+
+            switch state {
+            case .naming:
+                InlineRenameField(
+                    initial: "",
+                    placeholder: "New branch",
+                    font: store.sessionFont.font(),
+                    commitsOnBlur: false
+                ) { branch in
+                    let branch = branch?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    guard !branch.isEmpty else {
+                        newWorktree = nil
+                        refocusTerminal(window)
+                        return
+                    }
+                    newWorktree = .creating(branch)
+                    store.createWorktree(in: group, branch: branch, controller: window.controller) {
+                        newWorktree = nil
+                    }
+                }
+            case .creating(let branch):
+                Text(branch)
+                    .font(store.sessionFont.font())
+                    .foregroundColor(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.leading, 10)
+        .padding(.trailing, 6)
+        .padding(.vertical, 4)
+        .help("Creates the branch and a worktree folder next to the repository")
     }
 
     private var groupHeader: some View {
@@ -174,6 +236,18 @@ private struct SessionGroupSection: View {
                     SessionIndicator(activity: session.activity)
                 }
             }
+            if group.isRepository && hovering && newWorktree == nil {
+                Button(action: startNewWorktree) {
+                    Image(systemName: "plus")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(.secondary)
+                        .frame(width: 16, height: 16)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .help("New Worktree")
+            }
             Text("\(group.sessions.count)")
                 .font(store.repoFont.font(scale: 11 / 14, weight: .medium))
                 .foregroundColor(.secondary)
@@ -181,6 +255,7 @@ private struct SessionGroupSection: View {
         .padding(.horizontal, 6)
         .padding(.vertical, 4)
         .contentShape(Rectangle())
+        .onHover { hovering = $0 }
         .onTapGesture {
             guard !renaming else { return }
             withAnimation(.easeOut(duration: 0.15)) { store.toggleFold(group.id) }
@@ -192,10 +267,17 @@ private struct SessionGroupSection: View {
         .onDrop(of: [.text], delegate: SidebarDropDelegate(store: store, groupID: group.id, rowKey: nil))
         .help(group.isRepository ? group.id : "Sessions outside a git repository")
         .contextMenu {
+            if group.isRepository {
+                Button("New Worktree…", action: startNewWorktree)
+                    .disabled(newWorktree != nil)
+                Divider()
+            }
             Button("Rename…") { renaming = true }
             if store.groupNames[group.id] != nil {
                 Button("Reset Name") { store.renameGroup(group.id, to: nil) }
             }
+            Divider()
+            Button("Close All Sessions") { store.closeGroup(group) }
         }
     }
 }
@@ -337,6 +419,9 @@ private struct SessionRow: View {
         }
         Divider()
         Button("Close Session") { store.close(session.id) }
+        if let git = session.git, git.isLinkedWorktree {
+            Button("Remove Worktree") { store.removeWorktree(git) }
+        }
     }
 
     private func copy(_ string: String) {
@@ -385,6 +470,10 @@ private struct WorktreeRow: View {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(worktree.worktreeRoot, forType: .string)
             }
+            if worktree.isLinkedWorktree {
+                Divider()
+                Button("Remove Worktree") { store.removeWorktree(worktree) }
+            }
         }
     }
 }
@@ -397,6 +486,8 @@ private struct InlineRenameField: View {
     let initial: String
     var placeholder: String = "Name"
     let font: Font
+    /// Whether clicking away commits (like Finder renames) or cancels.
+    var commitsOnBlur = true
     /// Called with the new name, or nil if editing was cancelled.
     let onFinish: (String?) -> Void
 
@@ -416,7 +507,7 @@ private struct InlineRenameField: View {
             .onSubmit { finish(draft) }
             .onExitCommand { finish(nil) }
             .onChange(of: focused) { isFocused in
-                if !isFocused { finish(draft) }
+                if !isFocused { finish(commitsOnBlur ? draft : nil) }
             }
     }
 

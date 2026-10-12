@@ -259,9 +259,11 @@ final class SessionManager {
     }
 
     /// End a session that may or may not be displayed. Used by the sidebar.
-    func close(_ session: TerminalSession) {
+    func close(_ session: TerminalSession, withConfirmation: Bool = true) {
         if let controller = session.controller {
-            controller.closeSession(withConfirmation: true)
+            controller.closeSession(withConfirmation: withConfirmation)
+        } else if !withConfirmation {
+            sessions.removeAll { $0 === session }
         } else {
             confirmIfNeeded(session) { [weak self] in
                 self?.sessions.removeAll { $0 === session }

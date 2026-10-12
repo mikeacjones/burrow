@@ -46,4 +46,17 @@ enum ProcessInspector {
         }
         return name.isEmpty ? nil : name
     }
+
+    /// Current working directory of a process. Unlike the shell-reported pwd
+    /// (OSC 7), this follows a process that changes directory on its own,
+    /// e.g. an agent switching into a git worktree.
+    static func currentDirectory(pid: pid_t) -> String? {
+        var info = proc_vnodepathinfo()
+        let size = Int32(MemoryLayout<proc_vnodepathinfo>.stride)
+        guard proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &info, size) == size else { return nil }
+        let path = withUnsafeBytes(of: &info.pvi_cdir.vip_path) { raw in
+            String(cString: raw.bindMemory(to: CChar.self).baseAddress!)
+        }
+        return path.isEmpty ? nil : path
+    }
 }

@@ -61,6 +61,8 @@ enum SidebarRow: Identifiable, Equatable {
 struct SessionGroup: Identifiable, Equatable {
     let id: String
     var name: String
+    /// The repository's own name, unaffected by a user-chosen group name.
+    let repoName: String
     let isRepository: Bool
     var sessions: [SessionItem]
 
@@ -239,6 +241,7 @@ final class SessionStore: ObservableObject {
     /// Per-surface derived state, aggregated into a session row.
     private struct SurfaceState {
         let surface: Ghostty.SurfaceView
+        let pid: pid_t?
         let agent: AgentKind?
         let activity: SessionActivity
     }
@@ -366,10 +369,153 @@ final class SessionStore: ObservableObject {
 
     /// Start a new session in a worktree that doesn't have one yet.
     func openWorktree(_ worktree: GitWorktreeInfo, in controller: TerminalController?) {
+        openSession(at: worktree.worktreeRoot, in: controller)
+    }
+
+    private func openSession(at directory: String, in controller: TerminalController?) {
         guard let controller = controller ?? Self.keyController else { return }
         var config = Ghostty.SurfaceConfiguration()
-        config.workingDirectory = worktree.worktreeRoot
+        config.workingDirectory = directory
         SessionManager.shared.newSession(in: controller, baseConfig: config)
+        scheduleRefresh()
+    }
+
+    /// Create a branch and a worktree for it next to the repository, then open
+    /// a session there. Errors are shown in an alert. `completion` runs on the
+    /// main thread once git finishes.
+    func createWorktree(
+        in group: SessionGroup,
+        branch: String,
+        controller: TerminalController?,
+        completion: @escaping () -> Void
+    ) {
+        let branch = branch.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard group.isRepository, !branch.isEmpty else { return completion() }
+        let commonDir = group.id
+        let path = GitWorktreeCommands.defaultPath(
+            commonDir: commonDir, repoName: group.repoName, branch: branch)
+
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = GitWorktreeCommands.create(commonDir: commonDir, branch: branch, path: path)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    switch result {
+                    case .success:
+                        self.worktreeCache[commonDir] = nil
+                        self.openSession(at: path, in: controller)
+                    case .failure(let failure):
+                        let alert = NSAlert()
+                        alert.messageText = "Couldn't create worktree “\(branch)”"
+                        alert.informativeText = failure.message
+                        alert.alertStyle = .warning
+                        alert.runModal()
+                    }
+                    completion()
+                }
+            }
+        }
+    }
+
+    /// Remove a linked worktree and its branch. Asks first only if something
+    /// would be lost: open sessions in it, uncommitted files, or commits on its
+    /// branch that aren't on a remote (then deleting the branch is opt-in).
+    /// A clean worktree whose branch is pushed is removed without asking.
+    func removeWorktree(_ worktree: GitWorktreeInfo) {
+        guard worktree.isLinkedWorktree else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let check = GitWorktreeCommands.checkRemoval(of: worktree)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated { self.finishRemoving(worktree, check: check) }
+            }
+        }
+    }
+
+    private func finishRemoving(_ worktree: GitWorktreeInfo, check: GitWorktreeCommands.RemovalCheck) {
+        let openSessions = groups.flatMap(\.sessions).filter { $0.git?.worktreeRoot == worktree.worktreeRoot }
+        let branch = worktree.branch
+        let branchPushed = branch != nil && check.unpushedCommits == 0
+        var deleteBranch = branchPushed
+
+        if !openSessions.isEmpty || check.changedFiles > 0 || (branch != nil && !branchPushed) {
+            var notes: [String] = []
+            if !openSessions.isEmpty {
+                notes.append(openSessions.count == 1
+                    ? "Its open session will be closed."
+                    : "Its \(openSessions.count) open sessions will be closed.")
+            }
+            if check.changedFiles > 0 {
+                notes.append("\(check.changedFiles) uncommitted or untracked file(s) will be deleted.")
+            }
+            if let branch, branchPushed {
+                notes.append("Branch “\(branch)” is on a remote and will be deleted too.")
+            } else if let branch {
+                notes.append("Branch “\(branch)” has \(check.unpushedCommits) commit(s) that aren't on any remote.")
+            }
+
+            let alert = NSAlert()
+            alert.messageText = "Remove worktree “\(worktree.displayRef)”?"
+            alert.informativeText = notes.joined(separator: "\n\n")
+            alert.alertStyle = .warning
+            let remove = alert.addButton(withTitle: "Remove")
+            remove.hasDestructiveAction = true
+            alert.addButton(withTitle: "Cancel")
+            var checkbox: NSButton?
+            if let branch, !branchPushed {
+                let box = NSButton(checkboxWithTitle: "Also delete branch “\(branch)”", target: nil, action: nil)
+                box.state = .off
+                alert.accessoryView = box
+                checkbox = box
+            }
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            if let checkbox { deleteBranch = checkbox.state == .on }
+        }
+
+        for session in openSessions {
+            guard let session = SessionManager.shared.session(id: session.id) else { continue }
+            SessionManager.shared.close(session, withConfirmation: false)
+        }
+
+        let force = check.changedFiles > 0
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = GitWorktreeCommands.remove(worktree, force: force, deleteBranch: deleteBranch)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    self.worktreeCache[worktree.commonDir] = nil
+                    self.gitCache = self.gitCache.filter { !$0.key.hasPrefix(worktree.worktreeRoot) }
+                    self.scheduleRefresh()
+                    if case .failure(let failure) = result {
+                        let alert = NSAlert()
+                        alert.messageText = "Couldn't remove worktree “\(worktree.displayRef)”"
+                        alert.informativeText = failure.message
+                        alert.alertStyle = .warning
+                        alert.runModal()
+                    }
+                }
+            }
+        }
+    }
+
+    /// Close every session in a group. Asks once if any of them still has a
+    /// running process, rather than once per session.
+    func closeGroup(_ group: SessionGroup) {
+        let sessions = group.sessions.compactMap { SessionManager.shared.session(id: $0.id) }
+        guard !sessions.isEmpty else { return }
+        let running = sessions.filter { $0.surfaces.contains { $0.needsConfirmQuit } }.count
+        if running > 0 {
+            let alert = NSAlert()
+            alert.messageText = "Close all sessions in “\(group.name)”?"
+            alert.informativeText = running == 1
+                ? "1 session still has a running process. If you close it the process will be killed."
+                : "\(running) sessions still have running processes. If you close them the processes will be killed."
+            alert.alertStyle = .warning
+            let close = alert.addButton(withTitle: "Close \(sessions.count == 1 ? "Session" : "\(sessions.count) Sessions")")
+            close.hasDestructiveAction = true
+            alert.addButton(withTitle: "Cancel")
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        for session in sessions {
+            SessionManager.shared.close(session, withConfirmation: false)
+        }
         scheduleRefresh()
     }
 
@@ -456,6 +602,7 @@ final class SessionStore: ObservableObject {
                 if let pid { livePIDs.insert(pid) }
                 states.append(SurfaceState(
                     surface: surface,
+                    pid: pid,
                     agent: identity?.agent,
                     activity: activityState(
                         surface: surface, identity: identity,
@@ -472,7 +619,13 @@ final class SessionStore: ObservableObject {
                 ?? states.first
             guard let representative else { continue }
 
-            let pwd = primary?.pwd ?? representative.surface.pwd
+            // Agents can change directory without the shell knowing (e.g.
+            // Claude switching into a new worktree), so an agent row follows
+            // the agent process's own cwd.
+            let agentPwd = representative.agent != nil
+                ? representative.pid.flatMap(ProcessInspector.currentDirectory)
+                : nil
+            let pwd = agentPwd ?? primary?.pwd ?? representative.surface.pwd
             items.append((session.order, SessionItem(
                 id: session.id,
                 title: representative.surface.title,
@@ -513,6 +666,7 @@ final class SessionStore: ObservableObject {
                 byRepo[key] = (SessionGroup(
                     id: key,
                     name: item.git?.repoName ?? "Other",
+                    repoName: item.git?.repoName ?? "Other",
                     isRepository: item.git != nil,
                     sessions: []), [:])
             }
