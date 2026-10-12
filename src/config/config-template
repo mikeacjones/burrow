@@ -1,28 +1,34 @@
-# This is the configuration file for Ghostty.
+# This is the configuration file for Burrow.
 #
 # This template file has been automatically created at the following
-# path since Ghostty couldn't find any existing config files on your system:
+# path since Burrow couldn't find any existing config files on your system:
 #
 #   {[path]s}
 #
-# The template does not set any default options, since Ghostty ships
-# with sensible defaults for all options.
-# Note that you should not paste the output of `ghostty +show-config
-# --default` into your config: some default options actually conflict with each other
-# when explicitly set in a configuration file. Instead, only set the
-# options you actually need.
+# Burrow is built on Ghostty and supports all of Ghostty's configuration
+# options, with sensible defaults for all of them, so this template doesn't
+# set anything. Only set the options you actually need.
 #
-# Run `ghostty +show-config --default --docs` to view a list of
-# all available config options and their default values.
+# Burrow keeps its own configuration: it does not read Ghostty's config
+# files. To reuse your Ghostty settings, copy the options you want here, or
+# include Ghostty's file with a line like:
 #
-# Additionally, each config option is also explained in detail
-# on Ghostty's website, at https://ghostty.org/docs/config.
+#   config-file = ?~/.config/ghostty/config.ghostty
 #
-# Ghostty can reload the configuration while running by using the menu
-# options or the bound key (default: Command + Shift + comma on macOS and
-# Control + Shift + comma on other platforms). Not all config options can be
-# reloaded while running; some only apply to new windows and others may require
-# a full restart to take effect.
+# Every option is documented at https://ghostty.org/docs/config. To list all
+# options and their defaults from the command line, run:
+#
+#   /Applications/Burrow.app/Contents/MacOS/ghostty +show-config --default --docs
+#
+# (adjust the path to wherever Burrow.app is). Burrow can reload this file
+# while running from the menu or with Command + Shift + comma. Not all options
+# can be reloaded while running; some only apply to new windows and others
+# need a full restart.
+
+# Burrow options
+# ==============
+# # Font for the session sidebar. Defaults to the terminal's font.
+# sidebar-font-family = Georgia
 
 # Config syntax crash course
 # ==========================
