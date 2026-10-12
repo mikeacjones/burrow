@@ -518,6 +518,20 @@ extension Ghostty {
             return BackgroundBlur(fromCValue: v)
         }
 
+        /// ghostty-fork: share of the space a new split gives to the new pane,
+        /// from `default-h-split-ratio` / `default-v-split-ratio`.
+        func defaultSplitRatio(for direction: SplitTree<SurfaceView>.NewDirection) -> Double {
+            guard let config = self.config else { return 0.5 }
+            let key: String
+            switch direction {
+            case .left, .right: key = "default-h-split-ratio"
+            case .up, .down: key = "default-v-split-ratio"
+            }
+            var v: Double = 0.5
+            _ = ghostty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8)))
+            return min(max(v, 0.05), 0.95)
+        }
+
         var unfocusedSplitOpacity: Double {
             guard let config = self.config else { return 1 }
             var opacity: Double = 0.85

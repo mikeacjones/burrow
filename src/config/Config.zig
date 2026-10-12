@@ -1098,6 +1098,18 @@ palette: Palette = .{},
 /// Available since: 1.3.0
 @"split-preserve-zoom": SplitPreserveZoom = .{},
 
+/// ghostty-fork: The share of the space a new side-by-side split (`new_split`
+/// `right` or `left`) gives to the new pane, from 0 to 1. For example, 0.25
+/// makes the new pane a quarter of the width and leaves the existing pane
+/// three quarters. Values are clamped between 0.05 and 0.95.
+@"default-h-split-ratio": f64 = 0.5,
+
+/// ghostty-fork: The share of the space a new stacked split (`new_split`
+/// `down` or `up`) gives to the new pane, from 0 to 1. For example, 0.25
+/// makes the new pane a quarter of the height. Values are clamped between
+/// 0.05 and 0.95.
+@"default-v-split-ratio": f64 = 0.5,
+
 /// The foreground and background color for search matches. This only applies
 /// to non-focused search matches, also known as candidate matches.
 ///

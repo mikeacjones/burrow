@@ -122,10 +122,12 @@ extension SplitTree {
 
     /// Insert a new view at the given view point by creating a split in the given direction.
     /// This will always reset the zoomed state of the tree.
-    func inserting(view: ViewType, at: ViewType, direction: NewDirection) throws -> Self {
+    ///
+    /// `newViewRatio` is the share of the space given to the new view (ghostty-fork).
+    func inserting(view: ViewType, at: ViewType, direction: NewDirection, newViewRatio: Double = 0.5) throws -> Self {
         guard let root else { throw SplitError.viewNotFound }
         return .init(
-            root: try root.inserting(view: view, at: at, direction: direction),
+            root: try root.inserting(view: view, at: at, direction: direction, newViewRatio: newViewRatio),
             zoomed: nil)
     }
     /// Find a node containing a view with the specified ID.
@@ -509,7 +511,7 @@ extension SplitTree.Node {
     ///
     /// - Note: If the existing view (`at`) is not found in the tree, this method does nothing. We should
     /// maybe throw instead but at the moment we just do nothing.
-    func inserting(view: ViewType, at: ViewType, direction: NewDirection) throws -> Self {
+    func inserting(view: ViewType, at: ViewType, direction: NewDirection, newViewRatio: Double = 0.5) throws -> Self {
         // Get the path to our insertion point. If it doesn't exist we do
         // nothing.
         guard let path = path(to: .leaf(view: at)) else {
@@ -539,7 +541,8 @@ extension SplitTree.Node {
         let existingNode: Node = .leaf(view: at)
         let newSplit: Node = .split(.init(
             direction: splitDirection,
-            ratio: 0.5,
+            // The ratio is the left/top child's share.
+            ratio: newViewOnLeft ? newViewRatio : 1 - newViewRatio,
             left: newViewOnLeft ? newNode : existingNode,
             right: newViewOnLeft ? existingNode : newNode
         ))

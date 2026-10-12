@@ -39,6 +39,11 @@
 # sidebar-session-font-family = Menlo
 # sidebar-session-font-size = 12
 # sidebar-session-font-weight = regular
+#
+# # Share of the space a new split gives to the new pane (0 to 1).
+# # "h" is side-by-side (new_split:right/left), "v" is stacked (down/up).
+# default-h-split-ratio = 0.5
+# default-v-split-ratio = 0.5
 
 # Config syntax crash course
 # ==========================

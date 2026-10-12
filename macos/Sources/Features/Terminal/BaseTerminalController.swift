@@ -297,7 +297,8 @@ class BaseTerminalController: NSWindowController,
             newTree = try surfaceTree.inserting(
                 view: newView,
                 at: oldView,
-                direction: direction)
+                direction: direction,
+                newViewRatio: ghostty.config.defaultSplitRatio(for: direction))
         } catch {
             // If splitting fails for any reason (it should not), then we just log
             // and return. The new view we created will be deinitialized and its
