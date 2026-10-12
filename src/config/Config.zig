@@ -4262,7 +4262,69 @@ fn writeConfigTemplate(path: []const u8) !void {
         @embedFile("./config-template"),
         .{ .path = path },
     );
+    try writeCommentedDefaults(writer);
     try writer.flush();
+}
+
+/// ghostty-fork: Append every option to the template, commented out, with its
+/// default value and documentation. Generated from the config definition so
+/// it always matches the running version.
+fn writeCommentedDefaults(writer: *std.Io.Writer) !void {
+    var arena: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
+    defer arena.deinit();
+    const alloc = arena.allocator();
+
+    var cfg = try Config.default(alloc);
+    defer cfg.deinit();
+
+    var buf: std.Io.Writer.Allocating = .init(alloc);
+    const fmt: @import("formatter_file.zig").FileFormatter = .{
+        .alloc = alloc,
+        .config = &cfg,
+        .docs = true,
+    };
+    try fmt.format(&buf.writer);
+
+    try writer.writeAll(
+        \\
+        \\# All options
+        \\# ===========
+        \\# Every available option is listed below with its documentation and its
+        \\# default value. They are all commented out; uncomment a line (remove the
+        \\# leading "# ") and change its value to use it.
+        \\
+        \\
+    );
+
+    var lines = std.mem.splitScalar(u8, buf.written(), '\n');
+    while (lines.next()) |line| {
+        if (line.len == 0 or line[0] == '#') {
+            // Blank lines and documentation (already comments).
+            try writer.print("{s}\n", .{line});
+        } else {
+            // A `key = value` entry.
+            try writer.print("# {s}\n", .{line});
+        }
+    }
+}
+
+test "ghostty-fork: template lists every option, commented out" {
+    const testing = std.testing;
+    var buf: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer buf.deinit();
+    try writeCommentedDefaults(&buf.writer);
+    const out = buf.written();
+
+    // Every non-blank line is a comment, so the template changes nothing.
+    var lines = std.mem.splitScalar(u8, out, '\n');
+    while (lines.next()) |line| {
+        if (line.len > 0) try testing.expect(line[0] == '#');
+    }
+
+    // Upstream and Burrow options are both present with their defaults.
+    try testing.expect(std.mem.indexOf(u8, out, "\n# font-size = ") != null);
+    try testing.expect(std.mem.indexOf(u8, out, "\n# sidebar-repo-font-weight = semibold\n") != null);
+    try testing.expect(std.mem.indexOf(u8, out, "\n# sidebar-session-font-size = 12\n") != null);
 }
 
 /// Load configurations from the default configuration files. The default
