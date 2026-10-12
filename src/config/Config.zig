@@ -2168,6 +2168,13 @@ keybind: Keybinds = .{},
 /// Available since: 1.0.0 on macOS, 1.1.0 on GTK
 @"window-title-font-family": ?[:0]const u8 = null,
 
+/// ghostty-fork: The font used for the session sidebar.
+///
+/// If this setting is left unset, the sidebar uses the same font as the
+/// terminal (the primary `font-family`). Any installed font may be used;
+/// it is not required to be fixed-width.
+@"sidebar-font-family": ?[:0]const u8 = null,
+
 /// The text that will be displayed in the subtitle of the window. Valid values:
 ///
 ///   * `false` - Disable the subtitle.

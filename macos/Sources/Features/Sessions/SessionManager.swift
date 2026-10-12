@@ -21,6 +21,11 @@ final class TerminalSession: Identifiable {
     /// The surface that had focus when the session was last displayed.
     fileprivate(set) var lastFocusedSurfaceID: UUID?
 
+    /// A user-chosen name, like Ghostty's tab title override. While attached,
+    /// the window's `titleOverride` is authoritative (so Ghostty's "Change Tab
+    /// Title…" renames the session); it's stored here while detached.
+    fileprivate(set) var customName: String?
+
     /// The frame of the window that last displayed this session, used to
     /// restore the same window geometry when reattaching.
     fileprivate(set) var lastWindowFrame: NSRect?
@@ -35,6 +40,12 @@ final class TerminalSession: Identifiable {
     }
 
     var isAttached: Bool { controller != nil }
+
+    /// The session's name, if the user has set one.
+    var displayName: String? {
+        let name = controller.map { $0.titleOverride } ?? customName
+        return name?.isEmpty == false ? name : nil
+    }
 
     /// The surfaces of this session (live from the window when attached).
     var surfaces: SplitTree<Ghostty.SurfaceView> { controller?.surfaceTree ?? tree }
@@ -120,6 +131,7 @@ final class SessionManager {
             tree.contains { candidate.tree.contains($0) }
         }) {
             session.controller = controller
+            controller.titleOverride = session.customName
             session.tree = tree
             session.lastActive = Date()
             return
@@ -158,7 +170,19 @@ final class SessionManager {
         session.controller = controller
         session.lastActive = Date()
         controller.surfaceTree = session.tree
+        controller.titleOverride = session.customName
         focus(session, in: controller)
+    }
+
+    /// Rename a session (nil or empty clears the name).
+    func rename(_ session: TerminalSession, to name: String?) {
+        let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = trimmed?.isEmpty == false ? trimmed : nil
+        if let controller = session.controller {
+            controller.titleOverride = value
+        } else {
+            session.customName = value
+        }
     }
 
     private func detach(_ session: TerminalSession, from controller: TerminalController) {
@@ -167,6 +191,7 @@ final class SessionManager {
         }
         session.lastFocusedSurfaceID = controller.focusedSurface?.id ?? session.lastFocusedSurfaceID
         session.lastWindowFrame = controller.window?.frame ?? session.lastWindowFrame
+        session.customName = controller.titleOverride
         session.controller = nil
         session.lastActive = Date()
 

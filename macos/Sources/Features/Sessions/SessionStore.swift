@@ -1,6 +1,8 @@
 import AppKit
 import Combine
 import Foundation
+import GhosttyKit
+import SwiftUI
 
 /// One terminal session as displayed in the sidebar.
 struct SessionItem: Identifiable, Equatable {
@@ -17,6 +19,13 @@ struct SessionItem: Identifiable, Equatable {
     /// Number of terminals (splits) in the session.
     var surfaceCount: Int
 
+    /// A user-chosen name for the session (like a tab title override).
+    var customName: String?
+
+    /// Key used for custom row ordering. Keyed by worktree so a position is
+    /// kept when a session in that worktree is opened or closed.
+    var orderKey: String { git?.worktreeRoot ?? "session:\(id.uuidString)" }
+
     var isAttached: Bool { attachedWindow != nil }
 
     /// A useful one-line description: the agent's task title, else the shell title.
@@ -28,16 +37,45 @@ struct SessionItem: Identifiable, Equatable {
     }
 }
 
+/// A row in a repository group: an open session, or a worktree with no session.
+enum SidebarRow: Identifiable, Equatable {
+    case session(SessionItem)
+    case worktree(GitWorktreeInfo)
+
+    var id: String {
+        switch self {
+        case .session(let item): return "session:\(item.id.uuidString)"
+        case .worktree(let worktree): return "worktree:\(worktree.worktreeRoot)"
+        }
+    }
+
+    var orderKey: String {
+        switch self {
+        case .session(let item): return item.orderKey
+        case .worktree(let worktree): return worktree.worktreeRoot
+        }
+    }
+}
+
 /// Sessions belonging to the same git repository (or "Other" for non-git directories).
 struct SessionGroup: Identifiable, Equatable {
     let id: String
-    let name: String
+    var name: String
     let isRepository: Bool
     var sessions: [SessionItem]
 
     /// Worktrees of this repository that have no session open, shown dimmed
     /// so a session can be started in them with one click.
     var idleWorktrees: [GitWorktreeInfo] = []
+
+    /// Sessions and idle worktrees in display order.
+    var rows: [SidebarRow] = []
+}
+
+/// What is currently being dragged in the sidebar, for reordering.
+enum SidebarDrag: Equatable {
+    case group(String)
+    case row(group: String, key: String)
 }
 
 /// Derives git worktree and agent activity information for every session in
@@ -62,6 +100,29 @@ final class SessionStore: ObservableObject {
         didSet { defaults.set(Array(foldedGroups), forKey: Keys.folded) }
     }
 
+    /// Custom order of repository groups (by group id), set by dragging.
+    @Published private(set) var groupOrder: [String] {
+        didSet { defaults.set(groupOrder, forKey: Keys.groupOrder) }
+    }
+
+    /// Custom order of rows within each group (group id -> row order keys).
+    @Published private(set) var rowOrder: [String: [String]] {
+        didSet { defaults.set(rowOrder, forKey: Keys.rowOrder) }
+    }
+
+    /// User-chosen names for repository groups.
+    @Published private(set) var groupNames: [String: String] {
+        didSet { defaults.set(groupNames, forKey: Keys.groupNames) }
+    }
+
+    /// The font family used by the sidebar: `sidebar-font-family` from the
+    /// config, else the terminal's font.
+    @Published private(set) var fontFamily: String?
+    private var needsFontResolve = true
+
+    /// The item currently being dragged, if any.
+    var dragging: SidebarDrag?
+
     static let minWidth: CGFloat = 160
     static let maxWidth: CGFloat = 400
     static let railWidth: CGFloat = 40
@@ -73,6 +134,9 @@ final class SessionStore: ObservableObject {
         static let collapsed = "SessionSidebarCollapsed"
         static let width = "SessionSidebarWidth"
         static let folded = "SessionSidebarFoldedGroups"
+        static let groupOrder = "SessionSidebarGroupOrder"
+        static let rowOrder = "SessionSidebarRowOrder"
+        static let groupNames = "SessionSidebarGroupNames"
     }
 
     /// How often sessions are re-scanned. Everything per tick is cheap
@@ -125,6 +189,9 @@ final class SessionStore: ObservableObject {
             ? min(max(CGFloat(storedWidth), Self.minWidth), Self.maxWidth)
             : 220
         foldedGroups = Set(defaults.stringArray(forKey: Keys.folded) ?? [])
+        groupOrder = defaults.stringArray(forKey: Keys.groupOrder) ?? []
+        rowOrder = defaults.dictionary(forKey: Keys.rowOrder) as? [String: [String]] ?? [:]
+        groupNames = defaults.dictionary(forKey: Keys.groupNames) as? [String: String] ?? [:]
         start()
     }
 
@@ -148,6 +215,81 @@ final class SessionStore: ObservableObject {
               let controller = controller ?? Self.keyController else { return }
         SessionManager.shared.attach(session, to: controller)
         scheduleRefresh()
+    }
+
+    // MARK: Reordering
+
+    /// Move a group so it sits where `target` is (dragging up or down).
+    func moveGroup(_ dragged: String, onto target: String) {
+        var ids = groups.map(\.id)
+        guard dragged != target,
+              let from = ids.firstIndex(of: dragged),
+              let to = ids.firstIndex(of: target) else { return }
+        ids.remove(at: from)
+        ids.insert(dragged, at: to)
+        groupOrder = ids
+        applyOrdering()
+    }
+
+    /// Move a row within its group so it sits where `target` is.
+    func moveRow(_ dragged: String, onto target: String, in groupID: String) {
+        guard dragged != target, let group = groups.first(where: { $0.id == groupID }) else { return }
+        var keys: [String] = []
+        for row in group.rows where !keys.contains(row.orderKey) { keys.append(row.orderKey) }
+        guard let from = keys.firstIndex(of: dragged), let to = keys.firstIndex(of: target) else { return }
+        keys.remove(at: from)
+        keys.insert(dragged, at: to)
+        rowOrder[groupID] = keys
+        applyOrdering()
+    }
+
+    /// Re-sort the current groups immediately (for live drag feedback).
+    private func applyOrdering() {
+        let ordered = order(groups)
+        if ordered != groups { groups = ordered }
+    }
+
+    // MARK: Renaming
+
+    func renameGroup(_ groupID: String, to name: String?) {
+        let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        groupNames[groupID] = trimmed.isEmpty ? nil : trimmed
+        scheduleRefresh()
+    }
+
+    func renameSession(_ id: UUID, to name: String?) {
+        guard let session = SessionManager.shared.session(id: id) else { return }
+        SessionManager.shared.rename(session, to: name)
+        scheduleRefresh()
+    }
+
+    // MARK: Font
+
+    /// A sidebar font at the given size, in the configured/terminal family.
+    func font(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
+        guard let fontFamily else { return .system(size: size, weight: weight) }
+        return .custom(fontFamily, size: size).weight(weight)
+    }
+
+    private func resolveFontFamily() {
+        let configured = (NSApp.delegate as? AppDelegate)?.ghostty.config.sidebarFontFamily
+        var family = configured
+
+        // Default to the font the terminal actually renders with.
+        if family == nil {
+            for session in SessionManager.shared.sessions {
+                guard let surface = session.primarySurface?.surface,
+                      let raw = ghostty_surface_quicklook_font(surface) else { continue }
+                let font = Unmanaged<CTFont>.fromOpaque(raw).takeRetainedValue()
+                family = CTFontCopyFamilyName(font) as String
+                break
+            }
+            // No terminal yet; try again on the next refresh.
+            if family == nil { return }
+        }
+
+        needsFontResolve = false
+        if family != fontFamily { fontFamily = family }
     }
 
     /// Start a new session in a worktree that doesn't have one yet.
@@ -193,6 +335,12 @@ final class SessionStore: ObservableObject {
                 MainActor.assumeIsolated { self?.scheduleRefresh() }
             })
         }
+        observers.append(center.addObserver(forName: .ghosttyConfigDidChange, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.needsFontResolve = true
+                self?.scheduleRefresh()
+            }
+        })
     }
 
     func scheduleRefresh() {
@@ -201,6 +349,7 @@ final class SessionStore: ObservableObject {
 
     func refresh() {
         let now = Date()
+        if needsFontResolve { resolveFontFamily() }
         var items: [(order: Int, item: SessionItem)] = []
         var liveSurfaces: Set<UUID> = []
         var livePIDs: Set<pid_t> = []
@@ -243,7 +392,8 @@ final class SessionStore: ObservableObject {
                 agent: representative.agent,
                 activity: representative.activity,
                 attachedWindow: session.controller.map(ObjectIdentifier.init),
-                surfaceCount: states.count)))
+                surfaceCount: states.count,
+                customName: session.displayName)))
         }
 
         // Forget surfaces and processes that are gone.
@@ -251,14 +401,15 @@ final class SessionStore: ObservableObject {
         processCache = processCache.filter { livePIDs.contains($0.key) }
         if gitCache.count > 256 { gitCache.removeAll() }
 
-        let newGroups = group(items).map { group in
-            guard group.isRepository else { return group }
+        let newGroups = order(group(items).map { group in
             var group = group
+            if let name = groupNames[group.id] { group.name = name }
+            guard group.isRepository else { return group }
             let open = Set(group.sessions.compactMap { $0.git?.worktreeRoot })
             group.idleWorktrees = worktrees(commonDir: group.id, now: now)
                 .filter { !open.contains($0.worktreeRoot) }
             return group
-        }
+        })
         if worktreeCache.count > 64 { worktreeCache.removeAll() }
         if newGroups != groups {
             groups = newGroups
@@ -292,6 +443,39 @@ final class SessionStore: ObservableObject {
                 if lhs.isRepository != rhs.isRepository { return lhs.isRepository }
                 return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
             }
+    }
+
+    /// Apply the user's custom group and row ordering. Anything without a
+    /// custom position keeps its default order, after the ordered items.
+    private func order(_ groups: [SessionGroup]) -> [SessionGroup] {
+        let groupIndex = Dictionary(groupOrder.enumerated().map { ($1, $0) }, uniquingKeysWith: { a, _ in a })
+        let sortedGroups = groups.enumerated().sorted { lhs, rhs in
+            let l = groupIndex[lhs.element.id] ?? Int.max
+            let r = groupIndex[rhs.element.id] ?? Int.max
+            return l != r ? l < r : lhs.offset < rhs.offset
+        }.map(\.element)
+
+        return sortedGroups.map { group in
+            var group = group
+            let defaultRows = group.sessions.map(SidebarRow.session) + group.idleWorktrees.map(SidebarRow.worktree)
+            let keyIndex = Dictionary(
+                (rowOrder[group.id] ?? []).enumerated().map { ($1, $0) },
+                uniquingKeysWith: { a, _ in a })
+            group.rows = defaultRows.enumerated().sorted { lhs, rhs in
+                let l = keyIndex[lhs.element.orderKey] ?? Int.max
+                let r = keyIndex[rhs.element.orderKey] ?? Int.max
+                return l != r ? l < r : lhs.offset < rhs.offset
+            }.map(\.element)
+            group.sessions = group.rows.compactMap {
+                if case .session(let item) = $0 { return item }
+                return nil
+            }
+            group.idleWorktrees = group.rows.compactMap {
+                if case .worktree(let worktree) = $0 { return worktree }
+                return nil
+            }
+            return group
+        }
     }
 
     // MARK: Derivation

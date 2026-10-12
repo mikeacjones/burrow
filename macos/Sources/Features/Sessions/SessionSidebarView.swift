@@ -53,7 +53,7 @@ private struct SessionSidebar: View {
         VStack(spacing: 0) {
             header
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 12) {
                     ForEach(store.groups) { group in
                         SessionGroupSection(store: store, window: window, group: group)
                     }
@@ -71,20 +71,20 @@ private struct SessionSidebar: View {
 
         return HStack(spacing: 8) {
             Text("SESSIONS")
-                .font(.system(size: 10, weight: .semibold))
+                .font(store.font(10, .semibold))
                 .tracking(0.8)
                 .foregroundColor(.secondary)
             if working > 0 {
                 HStack(spacing: 3) {
                     CursorSpinner(size: 9)
-                    Text("\(working)").font(.system(size: 10, weight: .medium)).foregroundColor(.secondary)
+                    Text("\(working)").font(store.font(10, .medium)).foregroundColor(.secondary)
                 }
                 .help("\(working) agent(s) working")
             }
             if waiting > 0 {
                 HStack(spacing: 4) {
                     PulsingDot(color: SessionPalette.attention, size: 6)
-                    Text("\(waiting)").font(.system(size: 10, weight: .medium)).foregroundColor(.secondary)
+                    Text("\(waiting)").font(store.font(10, .medium)).foregroundColor(.secondary)
                 }
                 .help("\(waiting) agent(s) waiting for input")
             }
@@ -113,6 +113,7 @@ private struct SessionGroupSection: View {
     @ObservedObject var store: SessionStore
     let window: SidebarWindowRef
     let group: SessionGroup
+    @State private var renaming = false
 
     private var folded: Bool { store.foldedGroups.contains(group.id) }
 
@@ -120,30 +121,51 @@ private struct SessionGroupSection: View {
         VStack(alignment: .leading, spacing: 2) {
             groupHeader
             if !folded {
-                ForEach(group.sessions) { session in
-                    SessionRow(store: store, window: window, session: session)
-                }
-                ForEach(group.idleWorktrees, id: \.worktreeRoot) { worktree in
-                    WorktreeRow(store: store, window: window, worktree: worktree)
+                ForEach(group.rows) { row in
+                    rowView(row)
+                        .onDrag {
+                            store.dragging = .row(group: group.id, key: row.orderKey)
+                            return NSItemProvider(object: row.orderKey as NSString)
+                        }
+                        .onDrop(of: [.text], delegate: SidebarDropDelegate(
+                            store: store, groupID: group.id, rowKey: row.orderKey))
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func rowView(_ row: SidebarRow) -> some View {
+        switch row {
+        case .session(let session):
+            SessionRow(store: store, window: window, session: session)
+        case .worktree(let worktree):
+            WorktreeRow(store: store, window: window, worktree: worktree)
         }
     }
 
     private var groupHeader: some View {
         HStack(spacing: 6) {
             Image(systemName: "chevron.right")
-                .font(.system(size: 8, weight: .bold))
+                .font(.system(size: 9, weight: .bold))
                 .foregroundColor(.secondary)
                 .rotationEffect(.degrees(folded ? 0 : 90))
                 .frame(width: 10)
             Image(systemName: group.isRepository ? "shippingbox" : "folder")
-                .font(.system(size: 10))
+                .font(.system(size: 12))
                 .foregroundColor(.secondary)
-            Text(group.name)
-                .font(.system(size: 12, weight: .semibold))
-                .lineLimit(1)
-                .truncationMode(.middle)
+            if renaming {
+                InlineRenameField(initial: group.name, font: store.font(14, .semibold)) { name in
+                    renaming = false
+                    if let name { store.renameGroup(group.id, to: name) }
+                    refocusTerminal(window)
+                }
+            } else {
+                Text(group.name)
+                    .font(store.font(14, .semibold))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
             Spacer(minLength: 4)
 
             // When folded, keep important activity visible.
@@ -153,16 +175,28 @@ private struct SessionGroupSection: View {
                 }
             }
             Text("\(group.sessions.count)")
-                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .font(store.font(11, .medium))
                 .foregroundColor(.secondary)
         }
         .padding(.horizontal, 6)
-        .padding(.vertical, 3)
+        .padding(.vertical, 4)
         .contentShape(Rectangle())
         .onTapGesture {
+            guard !renaming else { return }
             withAnimation(.easeOut(duration: 0.15)) { store.toggleFold(group.id) }
         }
+        .onDrag {
+            store.dragging = .group(group.id)
+            return NSItemProvider(object: group.id as NSString)
+        }
+        .onDrop(of: [.text], delegate: SidebarDropDelegate(store: store, groupID: group.id, rowKey: nil))
         .help(group.isRepository ? group.id : "Sessions outside a git repository")
+        .contextMenu {
+            Button("Rename…") { renaming = true }
+            if store.groupNames[group.id] != nil {
+                Button("Reset Name") { store.renameGroup(group.id, to: nil) }
+            }
+        }
     }
 }
 
@@ -171,6 +205,7 @@ private struct SessionRow: View {
     let window: SidebarWindowRef
     let session: SessionItem
     @State private var hovering = false
+    @State private var renaming = false
 
     private var isCurrent: Bool { session.attachedWindow == window.id }
     private var isInOtherWindow: Bool { session.isAttached && !isCurrent }
@@ -182,15 +217,27 @@ private struct SessionRow: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 5) {
-                    Text(primaryLabel)
-                        .font(.system(size: 12, weight: isCurrent ? .semibold : .regular))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    if renaming {
+                        InlineRenameField(
+                            initial: session.customName ?? "",
+                            placeholder: branchLabel,
+                            font: store.font(12, .semibold)
+                        ) { name in
+                            renaming = false
+                            if let name { store.renameSession(session.id, to: name) }
+                            refocusTerminal(window)
+                        }
+                    } else {
+                        Text(session.customName ?? branchLabel)
+                            .font(store.font(12, isCurrent ? .semibold : .regular))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
                     Spacer(minLength: 0)
                     if session.surfaceCount > 1 {
                         Label("\(session.surfaceCount)", systemImage: "square.split.2x1")
                             .labelStyle(.titleAndIcon)
-                            .font(.system(size: 9, weight: .medium))
+                            .font(store.font(9, .medium))
                             .foregroundColor(.secondary)
                             .help("\(session.surfaceCount) splits")
                     }
@@ -213,7 +260,10 @@ private struct SessionRow: View {
                 .fill(rowFill))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .onTapGesture { store.select(session.id, in: window.controller) }
+        .onTapGesture {
+            guard !renaming else { return }
+            store.select(session.id, in: window.controller)
+        }
         .help(session.pwd ?? session.title)
         .contextMenu { contextMenu }
     }
@@ -224,10 +274,16 @@ private struct SessionRow: View {
         return .clear
     }
 
-    private var primaryLabel: String {
+    /// The branch (or directory, outside git) that identifies the session.
+    private var branchLabel: String {
         if let git = session.git { return git.displayRef }
         if let pwd = session.pwd { return abbreviate(pwd) }
         return session.title.isEmpty ? "Terminal" : session.title
+    }
+
+    /// When the session has a custom name, the branch moves to the status line.
+    private func withBranch(_ text: String) -> String {
+        session.customName == nil ? text : "\(branchLabel) · \(text)"
     }
 
     @ViewBuilder
@@ -235,19 +291,21 @@ private struct SessionRow: View {
         let agent = session.agent?.displayName ?? ""
         switch session.activity {
         case .agentWorking:
-            ShimmerText(text: "\(agent) · \(session.subtitle ?? "Thinking…")")
+            ShimmerText(text: withBranch("\(agent) · \(session.subtitle ?? "Thinking…")"), font: store.font(11))
         case .agentNeedsInput:
-            detail("\(agent) · Needs input", color: SessionPalette.attention)
+            detail(withBranch("\(agent) · Needs input"), color: SessionPalette.attention)
         case .agentDone:
-            detail("\(agent) · Done\(session.subtitle.map { " — \($0)" } ?? "")", color: SessionPalette.done)
+            detail(withBranch("\(agent) · Done\(session.subtitle.map { " — \($0)" } ?? "")"), color: SessionPalette.done)
         case .agentIdle:
-            detail("\(agent) · \(session.subtitle ?? "Idle")", color: .secondary)
+            detail(withBranch("\(agent) · \(session.subtitle ?? "Idle")"), color: .secondary)
         case .command(let name):
-            detail(name, color: .secondary)
+            detail(withBranch(name), color: .secondary)
         case .shell:
-            if session.git != nil, let pwd = session.pwd {
+            if session.customName != nil {
+                detail(branchLabel, color: .secondary.opacity(0.8))
+            } else if session.git != nil, let pwd = session.pwd {
                 detail(abbreviate(pwd), color: .secondary.opacity(0.8))
-            } else if let subtitle = session.subtitle, subtitle != primaryLabel {
+            } else if let subtitle = session.subtitle, subtitle != branchLabel {
                 detail(subtitle, color: .secondary.opacity(0.8))
             }
         }
@@ -255,7 +313,7 @@ private struct SessionRow: View {
 
     private func detail(_ text: String, color: Color) -> some View {
         Text(text)
-            .font(.system(size: 11))
+            .font(store.font(11))
             .foregroundColor(color)
             .lineLimit(1)
             .truncationMode(.tail)
@@ -263,6 +321,11 @@ private struct SessionRow: View {
 
     @ViewBuilder
     private var contextMenu: some View {
+        Button("Rename…") { renaming = true }
+        if session.customName != nil {
+            Button("Reset Name") { store.renameSession(session.id, to: nil) }
+        }
+        Divider()
         if let pwd = session.pwd {
             Button("Copy Path") { copy(pwd) }
             Button("Reveal in Finder") {
@@ -297,7 +360,7 @@ private struct WorktreeRow: View {
                 .frame(width: 20, height: 16)
 
             Text(worktree.displayRef)
-                .font(.system(size: 12))
+                .font(store.font(12))
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 0)
@@ -326,6 +389,82 @@ private struct WorktreeRow: View {
     }
 }
 
+// MARK: Renaming and reordering
+
+/// An inline text field for renaming. Return commits, Escape cancels, and
+/// clicking away commits. Committing an empty name clears the custom name.
+private struct InlineRenameField: View {
+    let initial: String
+    var placeholder: String = "Name"
+    let font: Font
+    /// Called with the new name, or nil if editing was cancelled.
+    let onFinish: (String?) -> Void
+
+    @State private var draft = ""
+    @State private var finished = false
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField(placeholder, text: $draft)
+            .textFieldStyle(.plain)
+            .font(font)
+            .focused($focused)
+            .onAppear {
+                draft = initial
+                DispatchQueue.main.async { focused = true }
+            }
+            .onSubmit { finish(draft) }
+            .onExitCommand { finish(nil) }
+            .onChange(of: focused) { isFocused in
+                if !isFocused { finish(draft) }
+            }
+    }
+
+    private func finish(_ value: String?) {
+        guard !finished else { return }
+        finished = true
+        onFinish(value)
+    }
+}
+
+/// Live reordering: as a dragged group or row passes over another, it moves
+/// into that position.
+private struct SidebarDropDelegate: DropDelegate {
+    let store: SessionStore
+    let groupID: String
+    /// The row this delegate is attached to, or nil for a group header.
+    let rowKey: String?
+
+    func validateDrop(info: DropInfo) -> Bool { store.dragging != nil }
+
+    func dropEntered(info: DropInfo) {
+        switch store.dragging {
+        case .group(let dragged):
+            withAnimation(.easeOut(duration: 0.15)) { store.moveGroup(dragged, onto: groupID) }
+        case .row(let draggedGroup, let draggedKey):
+            // Rows only move within their own repository.
+            guard draggedGroup == groupID, let rowKey else { return }
+            withAnimation(.easeOut(duration: 0.15)) { store.moveRow(draggedKey, onto: rowKey, in: groupID) }
+        case nil:
+            break
+        }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+
+    func performDrop(info: DropInfo) -> Bool {
+        store.dragging = nil
+        return true
+    }
+}
+
+/// Return keyboard focus to the window's terminal (e.g. after renaming).
+@MainActor
+private func refocusTerminal(_ window: SidebarWindowRef) {
+    guard let surface = window.controller?.focusedSurface else { return }
+    Ghostty.moveFocus(to: surface)
+}
+
 // MARK: Collapsed rail
 
 private struct SessionRail: View {
@@ -340,34 +479,41 @@ private struct SessionRail: View {
                 VStack(spacing: 4) {
                     ForEach(store.groups) { group in
                         Text(initials(group.name))
-                            .font(.system(size: 9, weight: .bold, design: .rounded))
+                            .font(store.font(9, .bold))
                             .foregroundColor(.secondary)
                             .padding(.top, 6)
                             .help(group.name)
-                        ForEach(group.sessions) { session in
-                            SessionIndicator(activity: session.activity)
-                                .frame(width: 30, height: 22)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 5)
-                                        .fill(session.attachedWindow == window.id ? Color.accentColor.opacity(0.25) : .clear))
-                                .contentShape(Rectangle())
-                                .onTapGesture { store.select(session.id, in: window.controller) }
-                                .help(railTooltip(group: group, session: session))
-                        }
-                        ForEach(group.idleWorktrees, id: \.worktreeRoot) { worktree in
-                            Image(systemName: "circle.dashed")
-                                .font(.system(size: 9))
-                                .foregroundColor(.secondary)
-                                .opacity(0.5)
-                                .frame(width: 30, height: 20)
-                                .contentShape(Rectangle())
-                                .onTapGesture { store.openWorktree(worktree, in: window.controller) }
-                                .help("\(group.name) · \(worktree.displayRef) — click to open")
+                        ForEach(group.rows) { row in
+                            railItem(row, group: group)
                         }
                     }
                 }
                 .padding(.bottom, 12)
             }
+        }
+    }
+
+    @ViewBuilder
+    private func railItem(_ row: SidebarRow, group: SessionGroup) -> some View {
+        switch row {
+        case .session(let session):
+            SessionIndicator(activity: session.activity)
+                .frame(width: 30, height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(session.attachedWindow == window.id ? Color.accentColor.opacity(0.25) : .clear))
+                .contentShape(Rectangle())
+                .onTapGesture { store.select(session.id, in: window.controller) }
+                .help(railTooltip(group: group, session: session))
+        case .worktree(let worktree):
+            Image(systemName: "circle.dashed")
+                .font(.system(size: 9))
+                .foregroundColor(.secondary)
+                .opacity(0.5)
+                .frame(width: 30, height: 20)
+                .contentShape(Rectangle())
+                .onTapGesture { store.openWorktree(worktree, in: window.controller) }
+                .help("\(group.name) · \(worktree.displayRef) — click to open")
         }
     }
 
@@ -377,6 +523,7 @@ private struct SessionRail: View {
 
     private func railTooltip(group: SessionGroup, session: SessionItem) -> String {
         var parts = [group.name]
+        if let name = session.customName { parts.append(name) }
         if let ref = session.git?.displayRef { parts.append(ref) }
         if let agent = session.agent { parts.append(agent.displayName) }
         return parts.joined(separator: " · ")

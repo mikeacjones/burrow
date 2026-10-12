@@ -340,6 +340,17 @@ extension Ghostty {
             return String(cString: ptr)
         }
 
+        /// ghostty-fork: font for the session sidebar; nil means "match the terminal".
+        var sidebarFontFamily: String? {
+            guard let config = self.config else { return nil }
+            var v: UnsafePointer<Int8>?
+            let key = "sidebar-font-family"
+            guard ghostty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8))) else { return nil }
+            guard let ptr = v else { return nil }
+            let value = String(cString: ptr)
+            return value.isEmpty ? nil : value
+        }
+
         var macosWindowButtons: MacOSWindowButtons {
             let defaultValue = MacOSWindowButtons.visible
             guard let config = self.config else { return defaultValue }
