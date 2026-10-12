@@ -57,6 +57,15 @@ pub const i18n: bool = config.i18n;
 /// avoid it in Zig coe as much as possible.
 pub const bundle_id = "com.mitchellh.ghostty";
 
+/// ghostty-fork: Burrow keeps its configuration separate from Ghostty's.
+/// Directory name used under $XDG_CONFIG_HOME and $XDG_STATE_HOME (config
+/// files, user themes, crash reports).
+pub const config_dir_name = "burrow";
+
+/// ghostty-fork: Directory name used under ~/Library/Application Support
+/// and ~/Library/Caches on macOS.
+pub const app_dir_id = "io.github.mikeacjones.burrow";
+
 /// True if we should have "slow" runtime safety checks. The initial motivation
 /// for this was terminal page/pagelist integrity checks. These were VERY
 /// slow but very thorough. But they made it so slow that the terminal couldn't

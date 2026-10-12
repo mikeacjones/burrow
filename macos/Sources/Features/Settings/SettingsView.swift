@@ -14,7 +14,7 @@ struct SettingsView: View {
             VStack(alignment: .leading) {
                 Text("Coming Soon. 🚧").font(.title)
                 Text("You can't configure settings in the GUI yet. To modify settings, " +
-                     "edit the file at $HOME/.config/ghostty/config.ghostty and restart Burrow.")
+                     "edit the file at $HOME/.config/burrow/config.ghostty and restart Burrow.")
                 .multilineTextAlignment(.leading)
                 .lineLimit(nil)
             }
