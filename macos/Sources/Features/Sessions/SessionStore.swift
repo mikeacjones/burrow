@@ -197,9 +197,16 @@ final class SessionStore: ObservableObject {
     /// This smooths over brief pauses between agent steps.
     private static let workingGracePeriod: TimeInterval = 2.5
 
-    /// Fraction of one CPU core above which an agent's process group is
-    /// considered busy. Idle agent TUIs sit near zero.
-    private static let busyCPUThreshold = 0.04
+    /// CPU use (fraction of one core) that an agent's process group must stay
+    /// above, for `busySampleCount` consecutive samples, to count as working.
+    ///
+    /// Measured on Claude Code: while working (spinner animating, tools
+    /// running) it never dropped below ~2.4%; while idle it sits around 0.5%
+    /// with isolated one-sample blips up to ~7% from timers and GC. Requiring a
+    /// sustained floor ignores the blips that a single-sample threshold
+    /// mistook for work.
+    private static let busyCPUFloor = 0.015
+    private static let busySampleCount = 3
 
     private let defaults = UserDefaults.ghostty
     private var timer: Timer?
@@ -221,6 +228,7 @@ final class SessionStore: ObservableObject {
         var lastCPU: UInt64 = 0
         var lastSample = Date.distantPast
         var lastActive = Date.distantPast
+        var recentCPU: [Double] = []
         var wasWorking = false
         var unseenCompletion = false
     }
@@ -595,10 +603,15 @@ final class SessionStore: ObservableObject {
 
         // CPU usage of the agent's whole process group since the last sample.
         let cpu = ProcessInspector.cpuTimeNanos(processGroup: pid)
+        if tracker.pgid != pid { tracker.recentCPU = [] }
         if tracker.pgid == pid, tracker.lastSample != .distantPast {
             let elapsed = now.timeIntervalSince(tracker.lastSample)
-            let used = Double(cpu &- tracker.lastCPU) / 1_000_000_000
-            if elapsed > 0, cpu >= tracker.lastCPU, used / elapsed > Self.busyCPUThreshold {
+            if elapsed > 0, cpu >= tracker.lastCPU {
+                let fraction = Double(cpu - tracker.lastCPU) / 1_000_000_000 / elapsed
+                tracker.recentCPU = Array((tracker.recentCPU + [fraction]).suffix(Self.busySampleCount))
+            }
+            if tracker.recentCPU.count == Self.busySampleCount,
+               let floor = tracker.recentCPU.min(), floor > Self.busyCPUFloor {
                 tracker.lastActive = now
             }
         }
