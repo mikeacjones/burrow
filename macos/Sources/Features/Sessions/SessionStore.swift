@@ -72,6 +72,54 @@ struct SessionGroup: Identifiable, Equatable {
     var rows: [SidebarRow] = []
 }
 
+/// A resolved sidebar font: family (nil = system font), size, and weight.
+struct SidebarFontStyle: Equatable {
+    var family: String?
+    var size: CGFloat
+    var weight: Font.Weight
+
+    static let defaultRepo = SidebarFontStyle(family: nil, size: 14, weight: .semibold)
+    static let defaultSession = SidebarFontStyle(family: nil, size: 12, weight: .regular)
+
+    /// A font in this style, optionally scaled and with a different weight.
+    func font(scale: CGFloat = 1, weight: Font.Weight? = nil) -> Font {
+        let size = (self.size * scale).rounded(.toNearestOrAwayFromZero)
+        let weight = weight ?? self.weight
+        guard let family else { return .system(size: size, weight: weight) }
+        return .custom(family, size: size).weight(weight)
+    }
+
+    /// Parses a weight name from the config (`thin` … `heavy`).
+    static func weight(named name: String, default defaultValue: Font.Weight) -> Font.Weight {
+        switch name {
+        case "thin": return .thin
+        case "light": return .light
+        case "regular": return .regular
+        case "medium": return .medium
+        case "semibold": return .semibold
+        case "bold": return .bold
+        case "heavy": return .heavy
+        default: return defaultValue
+        }
+    }
+}
+
+extension Font.Weight {
+    /// One step heavier, used to emphasize the session shown in a window.
+    var bolder: Font.Weight {
+        switch self {
+        case .ultraLight: return .thin
+        case .thin: return .light
+        case .light: return .regular
+        case .regular: return .semibold
+        case .medium: return .semibold
+        case .semibold: return .bold
+        case .bold: return .heavy
+        default: return .black
+        }
+    }
+}
+
 /// What is currently being dragged in the sidebar, for reordering.
 enum SidebarDrag: Equatable {
     case group(String)
@@ -115,9 +163,11 @@ final class SessionStore: ObservableObject {
         didSet { defaults.set(groupNames, forKey: Keys.groupNames) }
     }
 
-    /// The font family used by the sidebar: `sidebar-font-family` from the
-    /// config, else the terminal's font.
-    @Published private(set) var fontFamily: String?
+    /// Fonts for repository headers and session rows, from the
+    /// `sidebar-*-font-*` options. Families fall back to `sidebar-font-family`
+    /// and then to the terminal's font.
+    @Published private(set) var repoFont = SidebarFontStyle.defaultRepo
+    @Published private(set) var sessionFont = SidebarFontStyle.defaultSession
     private var needsFontResolve = true
 
     /// The item currently being dragged, if any.
@@ -265,31 +315,42 @@ final class SessionStore: ObservableObject {
 
     // MARK: Font
 
-    /// A sidebar font at the given size, in the configured/terminal family.
-    func font(_ size: CGFloat, _ weight: Font.Weight = .regular) -> Font {
-        guard let fontFamily else { return .system(size: size, weight: weight) }
-        return .custom(fontFamily, size: size).weight(weight)
-    }
+    private func resolveFonts() {
+        guard let config = (NSApp.delegate as? AppDelegate)?.ghostty.config else { return }
+        let repoFamily = config.sidebarRepoFontFamily ?? config.sidebarFontFamily
+        let sessionFamily = config.sidebarSessionFontFamily ?? config.sidebarFontFamily
 
-    private func resolveFontFamily() {
-        let configured = (NSApp.delegate as? AppDelegate)?.ghostty.config.sidebarFontFamily
-        var family = configured
-
-        // Default to the font the terminal actually renders with.
-        if family == nil {
-            for session in SessionManager.shared.sessions {
-                guard let surface = session.primarySurface?.surface,
-                      let raw = ghostty_surface_quicklook_font(surface) else { continue }
-                let font = Unmanaged<CTFont>.fromOpaque(raw).takeRetainedValue()
-                family = CTFontCopyFamilyName(font) as String
-                break
-            }
-            // No terminal yet; try again on the next refresh.
-            if family == nil { return }
+        // Unset families default to the font the terminal actually renders with.
+        var terminalFamily: String?
+        if repoFamily == nil || sessionFamily == nil {
+            terminalFamily = self.terminalFontFamily()
         }
 
-        needsFontResolve = false
-        if family != fontFamily { fontFamily = family }
+        let repo = SidebarFontStyle(
+            family: repoFamily ?? terminalFamily,
+            size: CGFloat(max(config.sidebarRepoFontSize, 6)),
+            weight: SidebarFontStyle.weight(named: config.sidebarRepoFontWeight, default: .semibold))
+        let session = SidebarFontStyle(
+            family: sessionFamily ?? terminalFamily,
+            size: CGFloat(max(config.sidebarSessionFontSize, 6)),
+            weight: SidebarFontStyle.weight(named: config.sidebarSessionFontWeight, default: .regular))
+        if repo != repoFont { repoFont = repo }
+        if session != sessionFont { sessionFont = session }
+
+        // If we needed the terminal's font but no terminal exists yet, retry
+        // on the next refresh.
+        let waitingForTerminal = terminalFamily == nil && (repoFamily == nil || sessionFamily == nil)
+        needsFontResolve = waitingForTerminal
+    }
+
+    private func terminalFontFamily() -> String? {
+        for session in SessionManager.shared.sessions {
+            guard let surface = session.primarySurface?.surface,
+                  let raw = ghostty_surface_quicklook_font(surface) else { continue }
+            let font = Unmanaged<CTFont>.fromOpaque(raw).takeRetainedValue()
+            return CTFontCopyFamilyName(font) as String
+        }
+        return nil
     }
 
     /// Start a new session in a worktree that doesn't have one yet.
@@ -349,7 +410,7 @@ final class SessionStore: ObservableObject {
 
     func refresh() {
         let now = Date()
-        if needsFontResolve { resolveFontFamily() }
+        if needsFontResolve { resolveFonts() }
         var items: [(order: Int, item: SessionItem)] = []
         var liveSurfaces: Set<UUID> = []
         var livePIDs: Set<pid_t> = []

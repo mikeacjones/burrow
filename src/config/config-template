@@ -29,6 +29,16 @@
 # ==============
 # # Font for the session sidebar. Defaults to the terminal's font.
 # sidebar-font-family = Georgia
+#
+# # Repository headers and session rows can be styled independently.
+# # Families fall back to sidebar-font-family. Weights: thin, light,
+# # regular, medium, semibold, bold, heavy.
+# sidebar-repo-font-family = Georgia
+# sidebar-repo-font-size = 14
+# sidebar-repo-font-weight = semibold
+# sidebar-session-font-family = Menlo
+# sidebar-session-font-size = 12
+# sidebar-session-font-weight = regular
 
 # Config syntax crash course
 # ==========================

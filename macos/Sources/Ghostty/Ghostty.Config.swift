@@ -341,14 +341,31 @@ extension Ghostty {
         }
 
         /// ghostty-fork: font for the session sidebar; nil means "match the terminal".
-        var sidebarFontFamily: String? {
+        var sidebarFontFamily: String? { sidebarString("sidebar-font-family") }
+
+        /// ghostty-fork: per-level sidebar fonts (repository headers and session rows).
+        var sidebarRepoFontFamily: String? { sidebarString("sidebar-repo-font-family") }
+        var sidebarRepoFontSize: Double { sidebarFloat("sidebar-repo-font-size", default: 14) }
+        var sidebarRepoFontWeight: String { sidebarString("sidebar-repo-font-weight") ?? "semibold" }
+        var sidebarSessionFontFamily: String? { sidebarString("sidebar-session-font-family") }
+        var sidebarSessionFontSize: Double { sidebarFloat("sidebar-session-font-size", default: 12) }
+        var sidebarSessionFontWeight: String { sidebarString("sidebar-session-font-weight") ?? "regular" }
+
+        /// Reads an optional string or enum option (enums are returned by name).
+        private func sidebarString(_ key: String) -> String? {
             guard let config = self.config else { return nil }
             var v: UnsafePointer<Int8>?
-            let key = "sidebar-font-family"
             guard ghostty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8))) else { return nil }
             guard let ptr = v else { return nil }
             let value = String(cString: ptr)
             return value.isEmpty ? nil : value
+        }
+
+        private func sidebarFloat(_ key: String, default defaultValue: Float) -> Double {
+            guard let config = self.config else { return Double(defaultValue) }
+            var v: Float = defaultValue
+            _ = ghostty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8)))
+            return Double(v)
         }
 
         var macosWindowButtons: MacOSWindowButtons {

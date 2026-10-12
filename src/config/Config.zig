@@ -2175,6 +2175,37 @@ keybind: Keybinds = .{},
 /// it is not required to be fixed-width.
 @"sidebar-font-family": ?[:0]const u8 = null,
 
+/// ghostty-fork: Font for repository group headers in the session sidebar.
+/// Falls back to `sidebar-font-family`, then to the terminal's font.
+@"sidebar-repo-font-family": ?[:0]const u8 = null,
+
+/// ghostty-fork: Font size in points for repository group headers in the
+/// session sidebar.
+@"sidebar-repo-font-size": f32 = 14,
+
+/// ghostty-fork: Font weight for repository group headers in the session
+/// sidebar.
+///
+/// Valid values: `thin`, `light`, `regular`, `medium`, `semibold`, `bold`,
+/// `heavy`.
+@"sidebar-repo-font-weight": SidebarFontWeight = .semibold,
+
+/// ghostty-fork: Font for session rows in the session sidebar. Falls back to
+/// `sidebar-font-family`, then to the terminal's font.
+@"sidebar-session-font-family": ?[:0]const u8 = null,
+
+/// ghostty-fork: Font size in points for session names in the session
+/// sidebar. Each session's status line and the rows for worktrees without a
+/// session scale with this size.
+@"sidebar-session-font-size": f32 = 12,
+
+/// ghostty-fork: Font weight for session names in the session sidebar. The
+/// session shown in the window is drawn one step bolder.
+///
+/// Valid values: `thin`, `light`, `regular`, `medium`, `semibold`, `bold`,
+/// `heavy`.
+@"sidebar-session-font-weight": SidebarFontWeight = .regular,
+
 /// The text that will be displayed in the subtitle of the window. Valid values:
 ///
 ///   * `false` - Disable the subtitle.
@@ -9269,6 +9300,17 @@ pub const MacWindowButtons = enum {
 };
 
 /// See macos-titlebar-style
+/// ghostty-fork: See sidebar-repo-font-weight and sidebar-session-font-weight.
+pub const SidebarFontWeight = enum {
+    thin,
+    light,
+    regular,
+    medium,
+    semibold,
+    bold,
+    heavy,
+};
+
 pub const MacTitlebarStyle = enum {
     native,
     transparent,

@@ -71,20 +71,20 @@ private struct SessionSidebar: View {
 
         return HStack(spacing: 8) {
             Text("SESSIONS")
-                .font(store.font(10, .semibold))
+                .font(store.sessionFont.font(scale: 10 / 12, weight: .semibold))
                 .tracking(0.8)
                 .foregroundColor(.secondary)
             if working > 0 {
                 HStack(spacing: 3) {
                     CursorSpinner(size: 9)
-                    Text("\(working)").font(store.font(10, .medium)).foregroundColor(.secondary)
+                    Text("\(working)").font(store.sessionFont.font(scale: 10 / 12, weight: .medium)).foregroundColor(.secondary)
                 }
                 .help("\(working) agent(s) working")
             }
             if waiting > 0 {
                 HStack(spacing: 4) {
                     PulsingDot(color: SessionPalette.attention, size: 6)
-                    Text("\(waiting)").font(store.font(10, .medium)).foregroundColor(.secondary)
+                    Text("\(waiting)").font(store.sessionFont.font(scale: 10 / 12, weight: .medium)).foregroundColor(.secondary)
                 }
                 .help("\(waiting) agent(s) waiting for input")
             }
@@ -155,14 +155,14 @@ private struct SessionGroupSection: View {
                 .font(.system(size: 12))
                 .foregroundColor(.secondary)
             if renaming {
-                InlineRenameField(initial: group.name, font: store.font(14, .semibold)) { name in
+                InlineRenameField(initial: group.name, font: store.repoFont.font()) { name in
                     renaming = false
                     if let name { store.renameGroup(group.id, to: name) }
                     refocusTerminal(window)
                 }
             } else {
                 Text(group.name)
-                    .font(store.font(14, .semibold))
+                    .font(store.repoFont.font())
                     .lineLimit(1)
                     .truncationMode(.middle)
             }
@@ -175,7 +175,7 @@ private struct SessionGroupSection: View {
                 }
             }
             Text("\(group.sessions.count)")
-                .font(store.font(11, .medium))
+                .font(store.repoFont.font(scale: 11 / 14, weight: .medium))
                 .foregroundColor(.secondary)
         }
         .padding(.horizontal, 6)
@@ -221,7 +221,7 @@ private struct SessionRow: View {
                         InlineRenameField(
                             initial: session.customName ?? "",
                             placeholder: branchLabel,
-                            font: store.font(12, .semibold)
+                            font: store.sessionFont.font(weight: store.sessionFont.weight.bolder)
                         ) { name in
                             renaming = false
                             if let name { store.renameSession(session.id, to: name) }
@@ -229,7 +229,7 @@ private struct SessionRow: View {
                         }
                     } else {
                         Text(session.customName ?? branchLabel)
-                            .font(store.font(12, isCurrent ? .semibold : .regular))
+                            .font(store.sessionFont.font(weight: isCurrent ? store.sessionFont.weight.bolder : nil))
                             .lineLimit(1)
                             .truncationMode(.middle)
                     }
@@ -237,7 +237,7 @@ private struct SessionRow: View {
                     if session.surfaceCount > 1 {
                         Label("\(session.surfaceCount)", systemImage: "square.split.2x1")
                             .labelStyle(.titleAndIcon)
-                            .font(store.font(9, .medium))
+                            .font(store.sessionFont.font(scale: 0.75, weight: .medium))
                             .foregroundColor(.secondary)
                             .help("\(session.surfaceCount) splits")
                     }
@@ -291,7 +291,7 @@ private struct SessionRow: View {
         let agent = session.agent?.displayName ?? ""
         switch session.activity {
         case .agentWorking:
-            ShimmerText(text: withBranch("\(agent) · \(session.subtitle ?? "Thinking…")"), font: store.font(11))
+            ShimmerText(text: withBranch("\(agent) · \(session.subtitle ?? "Thinking…")"), font: store.sessionFont.font(scale: 11 / 12, weight: .regular))
         case .agentNeedsInput:
             detail(withBranch("\(agent) · Needs input"), color: SessionPalette.attention)
         case .agentDone:
@@ -313,7 +313,7 @@ private struct SessionRow: View {
 
     private func detail(_ text: String, color: Color) -> some View {
         Text(text)
-            .font(store.font(11))
+            .font(store.sessionFont.font(scale: 11 / 12, weight: .regular))
             .foregroundColor(color)
             .lineLimit(1)
             .truncationMode(.tail)
@@ -360,7 +360,7 @@ private struct WorktreeRow: View {
                 .frame(width: 20, height: 16)
 
             Text(worktree.displayRef)
-                .font(store.font(12))
+                .font(store.sessionFont.font())
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 0)
@@ -479,7 +479,7 @@ private struct SessionRail: View {
                 VStack(spacing: 4) {
                     ForEach(store.groups) { group in
                         Text(initials(group.name))
-                            .font(store.font(9, .bold))
+                            .font(store.repoFont.font(scale: 9 / 14, weight: .bold))
                             .foregroundColor(.secondary)
                             .padding(.top, 6)
                             .help(group.name)
