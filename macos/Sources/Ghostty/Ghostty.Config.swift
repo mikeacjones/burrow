@@ -351,6 +351,15 @@ extension Ghostty {
         var sidebarSessionFontSize: Double { sidebarFloat("sidebar-session-font-size", default: 12) }
         var sidebarSessionFontWeight: String { sidebarString("sidebar-session-font-weight") ?? "regular" }
 
+        /// ghostty-fork: whether the sidebar offers to resume agents after a relaunch.
+        var sidebarResumeAgents: Bool {
+            guard let config = self.config else { return true }
+            var v = true
+            let key = "sidebar-resume-agents"
+            _ = ghostty_config_get(config, &v, key, UInt(key.lengthOfBytes(using: .utf8)))
+            return v
+        }
+
         /// Reads an optional string or enum option (enums are returned by name).
         private func sidebarString(_ key: String) -> String? {
             guard let config = self.config else { return nil }

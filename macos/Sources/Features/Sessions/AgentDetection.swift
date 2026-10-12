@@ -16,16 +16,23 @@ struct AgentKind: Equatable, Hashable {
     /// Titles the agent sets that carry no information beyond its own name.
     let genericTitles: Set<String>
 
+    /// Shell command that continues the agent's most recent conversation in
+    /// the current directory, if the agent supports it.
+    var resumeCommand: String?
+
     static let catalog: [AgentKind] = [
         .init(id: "claude", displayName: "Claude",
               executables: ["claude"], pathHints: ["claude-code", "/claude/"],
-              genericTitles: ["claude", "claude code"]),
+              genericTitles: ["claude", "claude code"],
+              resumeCommand: "claude --continue"),
         .init(id: "codex", displayName: "Codex",
               executables: ["codex"], pathHints: ["@openai/codex", "/codex/"],
-              genericTitles: ["codex"]),
+              genericTitles: ["codex"],
+              resumeCommand: "codex resume --last"),
         .init(id: "cursor", displayName: "Cursor",
               executables: ["cursor-agent"], pathHints: ["cursor-agent"],
-              genericTitles: ["cursor", "cursor agent", "cursor-agent"]),
+              genericTitles: ["cursor", "cursor agent", "cursor-agent"],
+              resumeCommand: "cursor-agent --continue"),
         .init(id: "gemini", displayName: "Gemini",
               executables: ["gemini"], pathHints: ["gemini-cli"],
               genericTitles: ["gemini", "gemini cli"]),

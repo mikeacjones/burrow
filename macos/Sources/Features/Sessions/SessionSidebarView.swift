@@ -437,6 +437,19 @@ private struct WorktreeRow: View {
     let worktree: GitWorktreeInfo
     @State private var hovering = false
 
+    /// The agent that was running here when Burrow last quit, if any.
+    private var agent: AgentKind? { store.resumableAgents[worktree.worktreeRoot] }
+
+    private func open(resume: Bool) {
+        store.openWorktree(worktree, in: window.controller, resume: resume)
+    }
+
+    private var helpText: String {
+        let path = abbreviate(worktree.worktreeRoot)
+        guard let agent else { return "Open a session in \(path)" }
+        return "Resume \(agent.displayName) in \(path) (⌥-click for a shell)"
+    }
+
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
             Image(systemName: hovering ? "plus.circle.fill" : "circle.dashed")
@@ -449,6 +462,17 @@ private struct WorktreeRow: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 0)
+            if let agent {
+                HStack(spacing: 3) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 9, weight: .medium))
+                    Text(agent.displayName)
+                        .font(store.sessionFont.font(scale: 11 / 12))
+                        .lineLimit(1)
+                }
+                .foregroundColor(.secondary)
+                .fixedSize()
+            }
         }
         .padding(.leading, 10)
         .padding(.trailing, 6)
@@ -459,10 +483,17 @@ private struct WorktreeRow: View {
                 .fill(hovering ? Color.primary.opacity(0.05) : .clear))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .onTapGesture { store.openWorktree(worktree, in: window.controller) }
-        .help("Open a session in \(abbreviate(worktree.worktreeRoot))")
+        .onTapGesture {
+            open(resume: !NSEvent.modifierFlags.contains(.option))
+        }
+        .help(helpText)
         .contextMenu {
-            Button("Open Session") { store.openWorktree(worktree, in: window.controller) }
+            if let agent {
+                Button("Resume \(agent.displayName)") { open(resume: true) }
+                Button("Open Shell") { open(resume: false) }
+            } else {
+                Button("Open Session") { open(resume: false) }
+            }
             Button("Reveal in Finder") {
                 NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: worktree.worktreeRoot)])
             }

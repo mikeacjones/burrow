@@ -170,6 +170,18 @@ final class SessionStore: ObservableObject {
     /// Repositories being closed: not re-remembered until their sessions are gone.
     private var closingRepos: Set<String> = []
 
+    /// Agents to offer resuming, by worktree root: those that were running
+    /// when Burrow last quit, until a session is opened in the worktree.
+    @Published private(set) var resumableAgents: [String: AgentKind] = [:]
+
+    /// Saved for the next launch (worktree root -> agent id): the resumable
+    /// agents plus every resumable agent running now.
+    private var savedAgents: [String: String] = [:]
+    private var resumeAgentsEnabled = true
+    /// Set once the app starts quitting, so sessions being torn down aren't
+    /// recorded as agents that stopped.
+    private var terminating = false
+
     /// User-chosen names for repository groups.
     @Published private(set) var groupNames: [String: String] {
         didSet { defaults.set(groupNames, forKey: Keys.groupNames) }
@@ -200,6 +212,7 @@ final class SessionStore: ObservableObject {
         static let rowOrder = "SessionSidebarRowOrder"
         static let groupNames = "SessionSidebarGroupNames"
         static let repos = "SessionSidebarRepos"
+        static let agents = "SessionSidebarResumableAgents"
     }
 
     /// How often sessions are re-scanned. Everything per tick is cheap
@@ -268,6 +281,10 @@ final class SessionStore: ObservableObject {
         rowOrder = defaults.dictionary(forKey: Keys.rowOrder) as? [String: [String]] ?? [:]
         groupNames = defaults.dictionary(forKey: Keys.groupNames) as? [String: String] ?? [:]
         rememberedRepos = defaults.stringArray(forKey: Keys.repos) ?? []
+        savedAgents = defaults.dictionary(forKey: Keys.agents) as? [String: String] ?? [:]
+        resumableAgents = savedAgents.compactMapValues { id in
+            AgentKind.catalog.first { $0.id == id && $0.resumeCommand != nil }
+        }
         start()
     }
 
@@ -379,15 +396,22 @@ final class SessionStore: ObservableObject {
         return nil
     }
 
-    /// Start a new session in a worktree that doesn't have one yet.
-    func openWorktree(_ worktree: GitWorktreeInfo, in controller: TerminalController?) {
-        openSession(at: worktree.worktreeRoot, in: controller)
+    /// Start a new session in a worktree that doesn't have one yet. If an
+    /// agent was running there when Burrow last quit, the session resumes it,
+    /// unless `resume` is false.
+    func openWorktree(_ worktree: GitWorktreeInfo, in controller: TerminalController?, resume: Bool = true) {
+        let root = worktree.worktreeRoot
+        let agent = resume ? resumableAgents[root] : nil
+        resumableAgents[root] = nil
+        // Typed into the shell, so the session stays open after the agent exits.
+        openSession(at: root, in: controller, initialInput: agent?.resumeCommand.map { "\($0)\n" })
     }
 
-    private func openSession(at directory: String, in controller: TerminalController?) {
+    private func openSession(at directory: String, in controller: TerminalController?, initialInput: String? = nil) {
         guard let controller = controller ?? Self.keyController else { return }
         var config = Ghostty.SurfaceConfiguration()
         config.workingDirectory = directory
+        config.initialInput = initialInput
         SessionManager.shared.newSession(in: controller, baseConfig: config)
         scheduleRefresh()
     }
@@ -501,6 +525,7 @@ final class SessionStore: ObservableObject {
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     self.worktreeCache[worktree.commonDir] = nil
+                    if case .success = result { self.resumableAgents[worktree.worktreeRoot] = nil }
                     self.gitCache = self.gitCache.filter { !$0.key.hasPrefix(worktree.worktreeRoot) }
                     self.scheduleRefresh()
                     if case .failure(let failure) = result {
@@ -536,6 +561,7 @@ final class SessionStore: ObservableObject {
         if group.isRepository {
             closingRepos.insert(group.id)
             rememberedRepos.removeAll { $0 == group.id }
+            for worktree in group.idleWorktrees { resumableAgents[worktree.worktreeRoot] = nil }
         }
         for session in sessions {
             SessionManager.shared.close(session, withConfirmation: false)
@@ -581,6 +607,9 @@ final class SessionStore: ObservableObject {
             guard let surface = note.object as? Ghostty.SurfaceView else { return }
             MainActor.assumeIsolated { self?.surfaceDidNotify(surface) }
         })
+        observers.append(center.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.terminating = true }
+        })
         observers.append(center.addObserver(forName: .ghosttyConfigDidChange, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated {
                 self?.needsFontResolve = true
@@ -608,7 +637,10 @@ final class SessionStore: ObservableObject {
 
     func refresh() {
         let now = Date()
-        if needsFontResolve { resolveFonts() }
+        if needsFontResolve {
+            resolveFonts()
+            readResumeSetting()
+        }
         var items: [(order: Int, item: SessionItem)] = []
         var liveSurfaces: Set<UUID> = []
         var livePIDs: Set<pid_t> = []
@@ -667,6 +699,7 @@ final class SessionStore: ObservableObject {
         processCache = processCache.filter { livePIDs.contains($0.key) }
         if gitCache.count > 256 { gitCache.removeAll() }
 
+        recordAgents(items.map(\.item))
         var grouped = group(items)
         rememberRepos(in: grouped)
         let shown = Set(grouped.map(\.id))
@@ -717,6 +750,41 @@ final class SessionStore: ObservableObject {
     private static func defaultGroupOrder(_ lhs: SessionGroup, _ rhs: SessionGroup) -> Bool {
         if lhs.isRepository != rhs.isRepository { return lhs.isRepository }
         return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+    }
+
+    private func readResumeSetting() {
+        guard let config = (NSApp.delegate as? AppDelegate)?.ghostty.config else { return }
+        resumeAgentsEnabled = config.sidebarResumeAgents
+        guard !resumeAgentsEnabled else { return }
+        if !resumableAgents.isEmpty { resumableAgents = [:] }
+        if !savedAgents.isEmpty {
+            savedAgents = [:]
+            defaults.removeObject(forKey: Keys.agents)
+        }
+    }
+
+    /// Note which resumable agent runs in each worktree, for the next launch.
+    /// An agent that exits or whose session is closed is forgotten, so only
+    /// those running at quit are offered. Saved on every change rather than at
+    /// quit, so a crash keeps them too.
+    private func recordAgents(_ items: [SessionItem]) {
+        guard resumeAgentsEnabled, !terminating else { return }
+
+        // A worktree with an open session no longer needs resuming.
+        let open = Set(items.compactMap { $0.git?.worktreeRoot })
+        let pending = resumableAgents.filter { !open.contains($0.key) }
+        if pending.count != resumableAgents.count { resumableAgents = pending }
+
+        var saved = pending.mapValues(\.id)
+        for item in items {
+            guard let agent = item.agent, agent.resumeCommand != nil,
+                  let root = item.git?.worktreeRoot else { continue }
+            saved[root] = agent.id
+        }
+        if saved != savedAgents {
+            savedAgents = saved
+            defaults.set(saved, forKey: Keys.agents)
+        }
     }
 
     /// Remember every repository with an open session, and stop holding back

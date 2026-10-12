@@ -2218,6 +2218,14 @@ keybind: Keybinds = .{},
 /// `heavy`.
 @"sidebar-session-font-weight": SidebarFontWeight = .regular,
 
+/// ghostty-fork: Offer to resume coding agents after a relaunch. While Burrow
+/// runs it notes which agent (Claude Code, Codex or Cursor) is running in
+/// each worktree. After a relaunch those worktrees are marked in the sidebar,
+/// and clicking one opens a session that continues the agent's most recent
+/// conversation there (`claude --continue`, `codex resume --last`,
+/// `cursor-agent --continue`). Option-click opens a plain shell instead.
+@"sidebar-resume-agents": bool = true,
+
 /// The text that will be displayed in the subtitle of the window. Valid values:
 ///
 ///   * `false` - Disable the subtitle.
