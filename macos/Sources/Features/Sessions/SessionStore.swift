@@ -160,6 +160,16 @@ final class SessionStore: ObservableObject {
         didSet { defaults.set(rowOrder, forKey: Keys.rowOrder) }
     }
 
+    /// Repositories kept in the sidebar (by common git dir), including across
+    /// relaunches, even with no session open. A repository is added when a
+    /// session opens in it and removed by closing it from the sidebar.
+    @Published private(set) var rememberedRepos: [String] {
+        didSet { defaults.set(rememberedRepos, forKey: Keys.repos) }
+    }
+
+    /// Repositories being closed: not re-remembered until their sessions are gone.
+    private var closingRepos: Set<String> = []
+
     /// User-chosen names for repository groups.
     @Published private(set) var groupNames: [String: String] {
         didSet { defaults.set(groupNames, forKey: Keys.groupNames) }
@@ -189,6 +199,7 @@ final class SessionStore: ObservableObject {
         static let groupOrder = "SessionSidebarGroupOrder"
         static let rowOrder = "SessionSidebarRowOrder"
         static let groupNames = "SessionSidebarGroupNames"
+        static let repos = "SessionSidebarRepos"
     }
 
     /// How often sessions are re-scanned. Everything per tick is cheap
@@ -256,6 +267,7 @@ final class SessionStore: ObservableObject {
         groupOrder = defaults.stringArray(forKey: Keys.groupOrder) ?? []
         rowOrder = defaults.dictionary(forKey: Keys.rowOrder) as? [String: [String]] ?? [:]
         groupNames = defaults.dictionary(forKey: Keys.groupNames) as? [String: String] ?? [:]
+        rememberedRepos = defaults.stringArray(forKey: Keys.repos) ?? []
         start()
     }
 
@@ -495,11 +507,11 @@ final class SessionStore: ObservableObject {
         }
     }
 
-    /// Close every session in a group. Asks once if any of them still has a
-    /// running process, rather than once per session.
+    /// Close every session in a group and remove the repository from the
+    /// sidebar. Asks once if any session still has a running process, rather
+    /// than once per session.
     func closeGroup(_ group: SessionGroup) {
         let sessions = group.sessions.compactMap { SessionManager.shared.session(id: $0.id) }
-        guard !sessions.isEmpty else { return }
         let running = sessions.filter { $0.surfaces.contains { $0.needsConfirmQuit } }.count
         if running > 0 {
             let alert = NSAlert()
@@ -512,6 +524,10 @@ final class SessionStore: ObservableObject {
             close.hasDestructiveAction = true
             alert.addButton(withTitle: "Cancel")
             guard alert.runModal() == .alertFirstButtonReturn else { return }
+        }
+        if group.isRepository {
+            closingRepos.insert(group.id)
+            rememberedRepos.removeAll { $0 == group.id }
         }
         for session in sessions {
             SessionManager.shared.close(session, withConfirmation: false)
@@ -643,7 +659,13 @@ final class SessionStore: ObservableObject {
         processCache = processCache.filter { livePIDs.contains($0.key) }
         if gitCache.count > 256 { gitCache.removeAll() }
 
-        let newGroups = order(group(items).map { group in
+        var grouped = group(items)
+        rememberRepos(in: grouped)
+        let shown = Set(grouped.map(\.id))
+        grouped += rememberedRepos.filter { !shown.contains($0) }.compactMap { emptyGroup(commonDir: $0, now: now) }
+        grouped.sort(by: Self.defaultGroupOrder)
+
+        let newGroups = order(grouped.map { group in
             var group = group
             if let name = groupNames[group.id] { group.name = name }
             guard group.isRepository else { return group }
@@ -674,18 +696,42 @@ final class SessionStore: ObservableObject {
             byRepo[key]?.orders[item.id] = order
         }
 
-        // Stable ordering: repos alphabetically (non-git last), sessions in the
-        // order they were created, so rows don't jump around.
-        return byRepo.values
-            .map { entry in
-                var group = entry.group
-                group.sessions.sort { (entry.orders[$0.id] ?? 0) < (entry.orders[$1.id] ?? 0) }
-                return group
-            }
-            .sorted { lhs, rhs in
-                if lhs.isRepository != rhs.isRepository { return lhs.isRepository }
-                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
-            }
+        // Sessions in the order they were created, so rows don't jump around.
+        return byRepo.values.map { entry in
+            var group = entry.group
+            group.sessions.sort { (entry.orders[$0.id] ?? 0) < (entry.orders[$1.id] ?? 0) }
+            return group
+        }
+    }
+
+    /// Default group order: repos alphabetically, non-git last. The user's
+    /// custom order is applied on top of this.
+    private static func defaultGroupOrder(_ lhs: SessionGroup, _ rhs: SessionGroup) -> Bool {
+        if lhs.isRepository != rhs.isRepository { return lhs.isRepository }
+        return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+    }
+
+    /// Remember every repository with an open session, and stop holding back
+    /// closed repositories once their sessions are gone.
+    private func rememberRepos(in groups: [SessionGroup]) {
+        let open = Set(groups.filter(\.isRepository).map(\.id))
+        closingRepos.formIntersection(open)
+        let new = groups
+            .filter { $0.isRepository && !closingRepos.contains($0.id) && !rememberedRepos.contains($0.id) }
+            .map(\.id)
+        if !new.isEmpty { rememberedRepos += new }
+    }
+
+    /// A remembered repository with no open session, listing its worktrees.
+    /// Repositories that no longer exist on disk are skipped.
+    private func emptyGroup(commonDir: String, now: Date) -> SessionGroup? {
+        guard let main = worktrees(commonDir: commonDir, now: now).first else { return nil }
+        return SessionGroup(
+            id: commonDir,
+            name: main.repoName,
+            repoName: main.repoName,
+            isRepository: true,
+            sessions: [])
     }
 
     /// Apply the user's custom group and row ordering. Anything without a

@@ -2344,10 +2344,12 @@ keybind: Keybinds = .{},
 /// running, the previous window state will not be restored because Ghostty only
 /// saves state on exit if this is enabled.
 ///
-/// The default value is `default`.
+/// The default value is `never`: Burrow starts without reopening the previous
+/// sessions. The session sidebar still remembers which repositories were open
+/// and lists their worktrees, so a session is one click away.
 ///
 /// This is currently only supported on macOS. This has no effect on Linux.
-@"window-save-state": WindowSaveState = .default,
+@"window-save-state": WindowSaveState = .never,
 
 /// Resize the window in discrete increments of the focused surface's cell size.
 /// If this is disabled, surfaces are resized in pixel increments. Currently

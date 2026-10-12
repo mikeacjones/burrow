@@ -277,7 +277,7 @@ private struct SessionGroupSection: View {
                 Button("Reset Name") { store.renameGroup(group.id, to: nil) }
             }
             Divider()
-            Button("Close All Sessions") { store.closeGroup(group) }
+            Button(group.isRepository ? "Close Repository" : "Close All Sessions") { store.closeGroup(group) }
         }
     }
 }
