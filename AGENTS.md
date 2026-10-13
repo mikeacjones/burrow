@@ -4,6 +4,9 @@ A file for [guiding coding agents](https://agents.md/).
 
 ## Commands
 
+- **Release build (Burrow.app):** `make release`
+  - A plain `zig build` replaces the app's core library with a Debug build;
+    run `make release` afterwards before handing the user an app.
 - **Build:** `zig build`
   - If you're on macOS and don't need to build the macOS app, use
     `-Demit-macos-app=false` to skip building the app bundle and speed up

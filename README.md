@@ -36,10 +36,18 @@ Requires Xcode (with the Metal toolchain: `xcodebuild -downloadComponent MetalTo
 and Zig 0.16 (`brew install zig@0.16`).
 
 ```sh
-# Core library (only needed when Zig code changes)
+make release   # optimized core + app: macos/build/ReleaseLocal/Burrow.app
+make install   # release, then copy into /Applications (quit Burrow first)
+```
+
+`make release` runs these two steps:
+
+```sh
+# Core library, optimized. A plain `zig build` is a Debug build, and the app
+# links whatever core was built last ("You're running a debug build" banner).
 /opt/homebrew/opt/zig@0.16/bin/zig build -Doptimize=ReleaseFast -Demit-macos-app=false
 
-# App: build/ReleaseLocal/Burrow.app (or -configuration Debug)
+# App (or -configuration Debug)
 cd macos
 xcodebuild -project Ghostty.xcodeproj -scheme Ghostty -configuration ReleaseLocal SYMROOT=$PWD/build build
 ```
