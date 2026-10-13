@@ -264,6 +264,13 @@ final class SessionStore: ObservableObject {
         var notified = false
         var wasWorking = false
         var unseenCompletion = false
+        /// Background tasks listed when the current turn started.
+        var turnStartBackground = 0
+        /// Background task count to wait out: set when a turn ends having
+        /// started more background work than it had at its start, and
+        /// cleared once the count falls back to that turn's starting count.
+        /// Tasks that were already running (e.g. a dev server) don't count.
+        var awaitedBackground: Int?
     }
 
     /// Per-surface derived state, aggregated into a session row.
@@ -936,6 +943,17 @@ final class SessionStore: ObservableObject {
             tracker.lastWorking = now
         }
         let working = !needsInput && now.timeIntervalSince(tracker.lastWorking) < Self.idleDebounce
+        let background = AgentStateDetector.backgroundTaskCount(screen: screen)
+        if working && !tracker.wasWorking {
+            tracker.turnStartBackground = background
+            tracker.awaitedBackground = nil
+        }
+        if tracker.wasWorking && !working && background > tracker.turnStartBackground {
+            tracker.awaitedBackground = tracker.turnStartBackground
+        }
+        if let baseline = tracker.awaitedBackground, background <= baseline {
+            tracker.awaitedBackground = nil
+        }
         if working && markedWorking { tracker.sawMarkedWorking = true }
 
         if tracker.wasWorking && !working && !needsInput && !isViewed && tracker.sawMarkedWorking {
@@ -951,7 +969,7 @@ final class SessionStore: ObservableObject {
         if needsInput { return .agentNeedsInput }
         if working { return .agentWorking }
         if tracker.unseenCompletion { return .agentDone }
-        if AgentStateDetector.hasBackgroundWork(screen: screen) { return .agentWaitingOnBackground }
+        if tracker.awaitedBackground != nil { return .agentWaitingOnBackground }
         return .agentIdle
     }
 }

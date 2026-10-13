@@ -209,21 +209,27 @@ enum AgentStateDetector {
 
     /// Footer counts of background work, e.g. Claude Code's
     /// "3 shells, 1 monitor" or "2 background tasks".
-    static let backgroundFooterPattern =
-        #"(?i)\b\d+\s+(shells?|monitors?|bashes|background\s+tasks?|local\s+agents?)\b"#
+    static let backgroundFooterPattern = try? NSRegularExpression(
+        pattern: #"\b(\d+)\s+(shells?|monitors?|bashes|background\s+tasks?|local\s+agents?)\b"#,
+        options: [.caseInsensitive])
 
     /// How many trailing non-empty lines count as the footer. Kept small so a
     /// transcript line like "3 shells still running" doesn't stick around
     /// after the work has finished.
     static let footerLineCount = 3
 
-    static func hasBackgroundWork(screen: String) -> Bool {
+    /// Total background tasks listed in the agent's footer ("3 shells,
+    /// 1 monitor" is 4). This includes long-lived ones like dev servers, so
+    /// it alone doesn't mean the agent is waiting on anything.
+    static func backgroundTaskCount(screen: String) -> Int {
+        guard let pattern = backgroundFooterPattern else { return 0 }
         let footer = screen
             .split(separator: "\n")
             .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
             .suffix(footerLineCount)
-            .joined(separator: "\n")
-        return footer.range(of: backgroundFooterPattern, options: .regularExpression) != nil
+            .joined(separator: "\n") as NSString
+        return pattern.matches(in: footer as String, range: NSRange(location: 0, length: footer.length))
+            .reduce(0) { $0 + (Int(footer.substring(with: $1.range(at: 1))) ?? 0) }
     }
 
     static func needsInput(screen: String, title: String) -> Bool {
