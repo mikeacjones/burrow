@@ -381,6 +381,8 @@ private struct SessionRow: View {
             detail(withBranch("\(agent) · Needs input"), color: SessionPalette.attention)
         case .agentDone:
             detail(withBranch("\(agent) · Done\(session.subtitle.map { " — \($0)" } ?? "")"), color: SessionPalette.done)
+        case .agentWaitingOnBackground:
+            detail(withBranch("\(agent) · \(session.subtitle ?? "Waiting on background tasks")"), color: SessionPalette.waiting)
         case .agentIdle:
             detail(withBranch("\(agent) · \(session.subtitle ?? "Idle")"), color: .secondary)
         case .command(let name):
@@ -769,7 +771,7 @@ extension SessionActivity {
     /// Activity worth surfacing even when a group is folded.
     var isNoteworthy: Bool {
         switch self {
-        case .agentWorking, .agentNeedsInput, .agentDone: return true
+        case .agentWorking, .agentWaitingOnBackground, .agentNeedsInput, .agentDone: return true
         default: return false
         }
     }

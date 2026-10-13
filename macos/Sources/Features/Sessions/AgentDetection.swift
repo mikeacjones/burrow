@@ -117,6 +117,10 @@ enum SessionActivity: Equatable {
     /// An agent is actively working (thinking, streaming, running tools).
     case agentWorking
 
+    /// An agent finished its turn but still has background work running
+    /// (shells, monitors, subagents) that it will pick back up.
+    case agentWaitingOnBackground
+
     /// An agent rang the bell or otherwise asked for attention.
     case agentNeedsInput
 
@@ -202,6 +206,25 @@ enum AgentStateDetector {
     static let workingTitleMarkers: [String] = [
         "⏳ working",                   // Cursor
     ]
+
+    /// Footer counts of background work, e.g. Claude Code's
+    /// "3 shells, 1 monitor" or "2 background tasks".
+    static let backgroundFooterPattern =
+        #"(?i)\b\d+\s+(shells?|monitors?|bashes|background\s+tasks?|local\s+agents?)\b"#
+
+    /// How many trailing non-empty lines count as the footer. Kept small so a
+    /// transcript line like "3 shells still running" doesn't stick around
+    /// after the work has finished.
+    static let footerLineCount = 3
+
+    static func hasBackgroundWork(screen: String) -> Bool {
+        let footer = screen
+            .split(separator: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .suffix(footerLineCount)
+            .joined(separator: "\n")
+        return footer.range(of: backgroundFooterPattern, options: .regularExpression) != nil
+    }
 
     static func needsInput(screen: String, title: String) -> Bool {
         let screen = normalize(screen), title = normalize(title)

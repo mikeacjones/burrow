@@ -53,6 +53,30 @@ struct ShimmerText: View {
     }
 }
 
+/// An hourglass that drains, then flips. Used while an agent waits on its
+/// own background work. Wall-clock driven, like `CursorSpinner`.
+struct HourglassSpinner: View {
+    static let frames = ["hourglass.tophalf.filled", "hourglass", "hourglass.bottomhalf.filled"]
+    static let interval: TimeInterval = 0.6
+
+    var color: Color = SessionPalette.waiting
+    var size: CGFloat = 9
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: Self.interval)) { context in
+            let tick = Int(context.date.timeIntervalSinceReferenceDate / Self.interval)
+            let frame = tick % (Self.frames.count + 1)
+            // The extra frame is the flip: the full bottom bulb turned upside down.
+            Image(systemName: Self.frames[min(frame, Self.frames.count - 1)])
+                .font(.system(size: size, weight: .semibold))
+                .foregroundColor(color)
+                .rotationEffect(.degrees(frame == Self.frames.count ? 180 : 0))
+                .animation(.easeInOut(duration: 0.3), value: frame == Self.frames.count)
+                .frame(width: 11, height: 11)
+        }
+    }
+}
+
 /// A softly pulsing dot used for "needs input".
 struct PulsingDot: View {
     let color: Color
@@ -74,6 +98,7 @@ enum SessionPalette {
     static let working = Color(red: 0.36, green: 0.84, blue: 0.47)
     static let attention = Color(red: 1.0, green: 0.65, blue: 0.2)
     static let done = Color(red: 0.38, green: 0.62, blue: 1.0)
+    static let waiting = Color(red: 0.75, green: 0.6, blue: 0.95)
 }
 
 /// The status glyph shown at the leading edge of a session row (and in the rail).
@@ -86,6 +111,8 @@ struct SessionIndicator: View {
             CursorSpinner()
         case .agentNeedsInput:
             PulsingDot(color: SessionPalette.attention)
+        case .agentWaitingOnBackground:
+            HourglassSpinner()
         case .agentDone:
             Circle().fill(SessionPalette.done).frame(width: 7, height: 7)
         case .agentIdle:

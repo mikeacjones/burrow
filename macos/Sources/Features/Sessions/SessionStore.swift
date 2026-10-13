@@ -951,6 +951,7 @@ final class SessionStore: ObservableObject {
         if needsInput { return .agentNeedsInput }
         if working { return .agentWorking }
         if tracker.unseenCompletion { return .agentDone }
+        if AgentStateDetector.hasBackgroundWork(screen: screen) { return .agentWaitingOnBackground }
         return .agentIdle
     }
 }
@@ -962,9 +963,10 @@ extension SessionActivity {
         case .shell: return 0
         case .command: return 1
         case .agentIdle: return 2
-        case .agentDone: return 3
-        case .agentWorking: return 4
-        case .agentNeedsInput: return 5
+        case .agentWaitingOnBackground: return 3
+        case .agentDone: return 4
+        case .agentWorking: return 5
+        case .agentNeedsInput: return 6
         }
     }
 }
