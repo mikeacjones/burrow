@@ -316,6 +316,9 @@ private struct SessionRow: View {
                             .truncationMode(.middle)
                     }
                     Spacer(minLength: 0)
+                    if let root = session.git?.worktreeRoot, let status = store.gitStatuses[root] {
+                        GitStatusBadges(status: status, font: store.sessionFont.font(scale: 0.75, weight: .medium))
+                    }
                     if session.surfaceCount > 1 {
                         Label("\(session.surfaceCount)", systemImage: "square.split.2x1")
                             .labelStyle(.titleAndIcon)
@@ -462,6 +465,9 @@ private struct WorktreeRow: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 0)
+            if let status = store.gitStatuses[worktree.worktreeRoot] {
+                GitStatusBadges(status: status, font: store.sessionFont.font(scale: 0.75, weight: .medium))
+            }
             if let agent {
                 HStack(spacing: 3) {
                     Image(systemName: "arrow.clockwise")
@@ -506,6 +512,47 @@ private struct WorktreeRow: View {
                 Button("Remove Worktree") { store.removeWorktree(worktree) }
             }
         }
+    }
+}
+
+/// Compact git status for a row: `●3` uncommitted files, `↑2` commits to
+/// push, `↓1` commits to pull. Nothing at all when the worktree is clean.
+private struct GitStatusBadges: View {
+    let status: GitStatusSummary
+    let font: Font
+
+    var body: some View {
+        if !status.isClean {
+            HStack(spacing: 4) {
+                if status.changedFiles > 0 {
+                    Text("●\(status.changedFiles)").foregroundColor(SessionPalette.attention)
+                }
+                if status.ahead > 0 {
+                    Text("↑\(status.ahead)").foregroundColor(SessionPalette.done)
+                }
+                if status.behind > 0 {
+                    Text("↓\(status.behind)").foregroundColor(.secondary)
+                }
+            }
+            .font(font)
+            .monospacedDigit()
+            .fixedSize()
+            .help(helpText)
+        }
+    }
+
+    private var helpText: String {
+        var parts: [String] = []
+        if status.changedFiles > 0 {
+            parts.append("\(status.changedFiles) uncommitted file\(status.changedFiles == 1 ? "" : "s")")
+        }
+        if status.ahead > 0 {
+            parts.append("\(status.ahead) commit\(status.ahead == 1 ? "" : "s") to push")
+        }
+        if status.behind > 0 {
+            parts.append("\(status.behind) commit\(status.behind == 1 ? "" : "s") to pull (as of last fetch)")
+        }
+        return parts.joined(separator: "\n")
     }
 }
 

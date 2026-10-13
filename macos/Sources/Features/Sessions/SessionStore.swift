@@ -174,6 +174,10 @@ final class SessionStore: ObservableObject {
     /// when Burrow last quit, until a session is opened in the worktree.
     @Published private(set) var resumableAgents: [String: AgentKind] = [:]
 
+    /// Uncommitted changes and unpushed/unpulled commits, by worktree root.
+    @Published private(set) var gitStatuses: [String: GitStatusSummary] = [:]
+    private let statusMonitor = GitStatusMonitor()
+
     /// Saved for the next launch (worktree root -> agent id): the resumable
     /// agents plus every resumable agent running now.
     private var savedAgents: [String: String] = [:]
@@ -589,6 +593,11 @@ final class SessionStore: ObservableObject {
     // MARK: Refresh
 
     private func start() {
+        statusMonitor.onChange = { [weak self] in
+            guard let self else { return }
+            self.gitStatuses = self.statusMonitor.statuses
+        }
+
         let timer = Timer(timeInterval: Self.refreshInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
         }
@@ -716,6 +725,7 @@ final class SessionStore: ObservableObject {
             return group
         })
         if worktreeCache.count > 64 { worktreeCache.removeAll() }
+        statusMonitor.watch(newGroups.flatMap { $0.sessions.compactMap(\.git) + $0.idleWorktrees })
         if newGroups != groups {
             groups = newGroups
         }
