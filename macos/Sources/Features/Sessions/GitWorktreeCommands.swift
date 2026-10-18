@@ -29,8 +29,9 @@ enum GitWorktreeCommands {
         return (parent as NSString).appendingPathComponent(folder)
     }
 
-    /// Create a worktree for `branch` at `path`. The branch is created from the
-    /// repository's current HEAD, or checked out if it already exists.
+    /// Create a worktree for `branch` at `path`. The branch is checked out if
+    /// it already exists. Otherwise it's created from the remote's default
+    /// branch (see `baseRef`), or from the repository's HEAD without a remote.
     static func create(commonDir: String, branch: String, path: String) -> Result<Void, Failure> {
         let repoDir = repositoryDirectory(commonDir: commonDir)
 
@@ -39,12 +40,34 @@ enum GitWorktreeCommands {
         }
 
         let exists = git(["show-ref", "--verify", "--quiet", "refs/heads/\(branch)"], in: repoDir).status == 0
-        let args = exists
-            ? ["worktree", "add", path, branch]
-            : ["worktree", "add", "-b", branch, path]
+        let args: [String]
+        if exists {
+            args = ["worktree", "add", path, branch]
+        } else if let base = baseRef(in: repoDir) {
+            // Without --no-track the branch would track the base, so its
+            // ahead/behind counts would compare against main, not its own push.
+            args = ["worktree", "add", "--no-track", "-b", branch, path, base]
+        } else {
+            args = ["worktree", "add", "-b", branch, path]
+        }
         let result = git(args, in: repoDir)
         guard result.status == 0 else { return .failure(failure(result.output, "git worktree add failed.")) }
         return .success(())
+    }
+
+    /// The remote branch new branches start from: whatever `origin/HEAD`
+    /// points at, or `origin/main` if it isn't set. It's fetched first so
+    /// the branch starts from the latest commit; if the fetch fails (e.g.
+    /// offline) the last fetched commit is used. Nil if the remote branch
+    /// doesn't exist locally.
+    private static func baseRef(in repoDir: String) -> String? {
+        let head = git(["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], in: repoDir)
+        let symbolic = head.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        let ref = head.status == 0 && symbolic.hasPrefix("origin/") ? symbolic : "origin/main"
+
+        _ = git(["fetch", "--quiet", "origin", String(ref.dropFirst("origin/".count))], in: repoDir)
+        let found = git(["show-ref", "--verify", "--quiet", "refs/remotes/\(ref)"], in: repoDir)
+        return found.status == 0 ? ref : nil
     }
 
     /// What removing a worktree would lose, gathered before asking the user.
@@ -158,6 +181,11 @@ enum GitWorktreeCommands {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["git", "-C", directory] + args
+        // A fetch needing credentials fails instead of waiting on a prompt
+        // no one can answer.
+        var environment = ProcessInfo.processInfo.environment
+        environment["GIT_TERMINAL_PROMPT"] = "0"
+        process.environment = environment
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = pipe
