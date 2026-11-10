@@ -187,6 +187,13 @@ struct AgentStateDetectorTests {
         #expect(working("→ Add a follow-up                 ctrl+c to stop"))
         #expect(needsInput("", title: "One Word - 🔐 Waiting for confirmation"))
         #expect(needsInput("Run this command?\nNot in allowlist: echo, sleep\n→ Run (once) (y)"))
+        #expect(needsInput("""
+            1. Should subagents be able to modify the workspace?
+              › [ ] Yes: add a general-purpose type (Recommended)
+                [ ] Other: (type to answer)
+            ↑/↓ option · ←/→ question · Space select · Enter next/submit · Esc to skip
+            """))
+        #expect(needsInput("→ Answer questions (Enter to select/next, Esc to skip)"))
         #expect(!working("→ Add a follow-up", title: "One Word - ✅ Ready"))
     }
 

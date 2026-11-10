@@ -165,7 +165,8 @@ enum TerminalTitle {
 /// Matching ignores case and whitespace so it is robust to how a TUI lays
 /// out its text.
 enum AgentStateDetector {
-    /// Option lines and labels that only appear in an agent's approval prompt.
+    /// Option lines and labels that only appear in an agent's approval or
+    /// question prompt.
     /// These are specific on purpose: loose phrases like "do you want to"
     /// also match ordinary replies ("Do you want me to commit this?").
     static let needsInputScreenMarkers: [String] = [
@@ -183,6 +184,10 @@ enum AgentStateDetector {
         "run (once) (y)",
         "waiting for approval",
         "skip & tell the agent",
+        "enter next/submit · esc to skip",          // question footer
+        "answer questions (enter to select/next",   // input placeholders
+        "approve mode switch (y/n)",
+        "waiting for decision (y/n/p)",
     ]
 
     /// Titles agents set while waiting on the user.
